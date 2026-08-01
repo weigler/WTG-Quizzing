@@ -10,7 +10,7 @@ import {
 import { firebaseConfig } from "../shared/firebase-config.js";
 import { UNSPLASH_ACCESS_KEY } from "../shared/unsplash-config.js";
 import { avatarSVG } from "../shared/avatar.js";
-import { kahootPoints } from "../shared/scoring.js";
+import { kahootPoints, questionMaxPoints } from "../shared/scoring.js";
 import { getJsPDF, addPdfHeader, addSectionTitle, AUTOTABLE_THEME } from "../shared/pdf-helpers.js";
 
 const app = initializeApp(firebaseConfig);
@@ -79,7 +79,7 @@ const rid = () => Math.random().toString(36).slice(2, 10);
 const genCode = () => String(Math.floor(100000 + Math.random() * 900000));
 
 function emptyQuestion(timeLimit = 20) {
-  return { id: rid(), text: "", type: "single", options: ["", ""], correct: [], timeLimit, imageUrl: null, imageCredit: null };
+  return { id: rid(), text: "", type: "single", options: ["", ""], correct: [], timeLimit, pointsMultiplier: 1, imageUrl: null, imageCredit: null };
 }
 function emptyQuiz() {
   return { id: null, title: "", theme: "", coverImage: null, coverCredit: null, defaultTimeLimit: 20, questions: [] };
@@ -95,11 +95,22 @@ function subscribeQuizzes() {
 
 /* ---------------- render raiz ---------------- */
 function render() {
-  if (view === "list") return renderList();
-  if (view === "editor") return renderEditor();
-  if (view === "control") return renderControl();
-  if (view === "sessions") return renderSessions();
-  if (view === "report") return renderReport();
+  try {
+    if (view === "list") return renderList();
+    if (view === "editor") return renderEditor();
+    if (view === "control") return renderControl();
+    if (view === "sessions") return renderSessions();
+    if (view === "report") return renderReport();
+  } catch (err) {
+    console.error("Erro ao desenhar a tela:", err);
+    root.innerHTML = `
+      <div class="eyebrow" style="color:var(--coral);">algo deu errado</div>
+      <h1 style="font-size:20px; margin-top:6px;">Não consegui carregar essa tela</h1>
+      <p style="color:var(--text-dim); margin-top:8px; font-size:13px;">Tenta recarregar a página.</p>
+      <button class="btn btn-primary btn-block" id="reload-btn" style="margin-top:18px;">Recarregar</button>
+    `;
+    document.getElementById("reload-btn")?.addEventListener("click", () => window.location.reload());
+  }
 }
 
 function navTabsHtml(active) {
@@ -249,7 +260,7 @@ function renderQuestionList() {
     <div class="q-row">
       ${item.imageUrl ? `<img src="${item.imageUrl}" />` : ""}
       <div class="info">
-        <div class="meta">${i + 1}. ${typeLabel(item.type)} · ${item.timeLimit}s</div>
+        <div class="meta">${i + 1}. ${typeLabel(item.type)} · ${item.timeLimit}s${item.pointsMultiplier > 1 ? ` · <span style="color:var(--gold);">bônus ${item.pointsMultiplier}x</span>` : ""}</div>
         <div class="text">${escapeHtml(item.text)}</div>
       </div>
       <button class="btn-link" id="qedit-${i}">editar</button>
@@ -288,8 +299,8 @@ function renderQuestionForm() {
 
     <textarea class="input" id="q-text" placeholder="Escreva a pergunta..." style="min-height:60px; margin-bottom:12px;">${escapeHtml(d.text)}</textarea>
 
-    <div style="display:flex; gap:10px; margin-bottom:12px;">
-      <select class="input" id="q-type" style="flex:1;">
+    <div style="display:flex; gap:10px; margin-bottom:12px; flex-wrap:wrap;">
+      <select class="input" id="q-type" style="flex:1; min-width:160px;">
         <option value="single" ${d.type === "single" ? "selected" : ""}>Escolha única</option>
         <option value="multiple" ${d.type === "multiple" ? "selected" : ""}>Múltipla escolha (2+ certas)</option>
         <option value="tf" ${d.type === "tf" ? "selected" : ""}>Verdadeiro ou Falso</option>
@@ -297,6 +308,14 @@ function renderQuestionForm() {
       <div style="display:flex; align-items:center; gap:8px; color:var(--text-dim); font-size:13px;">
         <span>tempo (s)</span>
         <input class="input" type="number" id="q-time" min="5" max="60" value="${d.timeLimit}" style="width:70px;" />
+      </div>
+      <div style="display:flex; align-items:center; gap:8px; color:var(--text-dim); font-size:13px;">
+        <span>pontuação</span>
+        <select class="input" id="q-multiplier" style="width:110px;">
+          <option value="1" ${(d.pointsMultiplier || 1) === 1 ? "selected" : ""}>normal (1x)</option>
+          <option value="2" ${(d.pointsMultiplier || 1) === 2 ? "selected" : ""}>bônus (2x)</option>
+          <option value="3" ${(d.pointsMultiplier || 1) === 3 ? "selected" : ""}>bônus (3x)</option>
+        </select>
       </div>
     </div>
 
@@ -317,6 +336,7 @@ function renderQuestionForm() {
   document.getElementById("q-img-remove")?.addEventListener("click", () => { d.imageUrl = null; d.imageCredit = null; renderQuestionForm(); });
   document.getElementById("q-text").oninput = (e) => (d.text = e.target.value);
   document.getElementById("q-time").oninput = (e) => (d.timeLimit = Math.max(5, Math.min(60, Number(e.target.value) || 20)));
+  document.getElementById("q-multiplier").onchange = (e) => (d.pointsMultiplier = Number(e.target.value) || 1);
   document.getElementById("q-type").onchange = (e) => {
     d.type = e.target.value;
     d.correct = [];
@@ -587,7 +607,7 @@ function renderQuestionLive() {
     if (ring) { ring.textContent = remaining; ring.parentElement.classList.toggle("low", remaining <= 5); }
   };
   root.innerHTML = `
-    <div class="eyebrow" style="text-align:center;">pergunta ${s.currentIndex + 1} de ${s.questions.length}</div>
+    <div class="eyebrow" style="text-align:center;">pergunta ${s.currentIndex + 1} de ${s.questions.length}${q.pointsMultiplier > 1 ? ` · <span style="color:var(--gold);">🎁 bônus ${q.pointsMultiplier}x</span>` : ""}</div>
     <div class="timer-ring"><span id="timer-num">--</span></div>
     ${q.imageUrl ? `<img src="${q.imageUrl}" style="width:100%; max-height:220px; object-fit:cover; border-radius:14px; margin-top:14px;" />` : ""}
     <h2 style="text-align:center; font-size:22px; margin:14px 0;">${escapeHtml(q.text)}</h2>
@@ -644,7 +664,7 @@ async function revealAnswers() {
       const sel = [...(ans.selected || [])].sort().join(",");
       const cor = [...q.correct].sort().join(",");
       correct = sel === cor && sel !== "";
-      if (correct) pts = kahootPoints(ans.timeMs, q.timeLimit);
+      if (correct) pts = kahootPoints(ans.timeMs, q.timeLimit, q.pointsMultiplier || 1);
     }
     writes.push(setDoc(doc(db, "sessions", sessionCode, "scores", pid), { total: prevTotal + pts, lastPoints: pts, lastCorrect: correct }));
   }
@@ -812,7 +832,7 @@ async function openReport(code) {
         const sel = [...(ans.selected || [])].sort().join(",");
         const cor = [...q.correct].sort().join(",");
         correct = sel === cor && sel !== "";
-        if (correct) points = kahootPoints(ans.timeMs, q.timeLimit);
+        if (correct) points = kahootPoints(ans.timeMs, q.timeLimit, q.pointsMultiplier || 1);
       }
       return {
         playerId: pid,

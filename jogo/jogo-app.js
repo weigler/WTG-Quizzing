@@ -5,7 +5,7 @@ import {
 
 import { firebaseConfig } from "../shared/firebase-config.js";
 import { AVATAR_COLORS, HATS, GLASSES, MOUTHS, defaultAvatar, avatarSVG, avatarPngDataUrl } from "../shared/avatar.js";
-import { kahootPoints } from "../shared/scoring.js";
+import { kahootPoints, lateJoinAllowed, questionMaxPoints } from "../shared/scoring.js";
 import { getJsPDF, addPdfHeader, addSectionTitle, AUTOTABLE_THEME } from "../shared/pdf-helpers.js";
 
 const app = initializeApp(firebaseConfig);
@@ -44,7 +44,12 @@ function viewForStatus(status) {
 }
 
 async function boot() {
-  const saved = JSON.parse(localStorage.getItem("quiz-player") || "null");
+  let saved = null;
+  try {
+    saved = JSON.parse(localStorage.getItem("quiz-player") || "null");
+  } catch {
+    localStorage.removeItem("quiz-player");
+  }
   const params = new URLSearchParams(window.location.search);
   const codeFromUrl = params.get("code");
 
@@ -75,7 +80,16 @@ async function boot() {
   render();
 }
 
-boot();
+boot().catch((err) => {
+  console.error("Erro ao iniciar:", err);
+  root.innerHTML = `
+    <div class="eyebrow" style="color:var(--coral);">algo deu errado</div>
+    <h1 style="font-size:20px; margin-top:6px;">Não consegui carregar o jogo</h1>
+    <p style="color:var(--text-dim); margin-top:8px; font-size:13px;">Tenta recarregar a página.</p>
+    <button class="btn btn-primary btn-block" id="reload-btn" style="margin-top:18px;">Recarregar</button>
+  `;
+  document.getElementById("reload-btn")?.addEventListener("click", () => window.location.reload());
+});
 
 /* ---------------- helpers ---------------- */
 function escapeHtml(str) {
@@ -124,7 +138,11 @@ async function goToAvatarStep(inputCode, inputName) {
   if (!nm) return showJoinError("Digite seu nome.");
   const snap = await getDoc(doc(db, "sessions", c));
   if (!snap.exists()) return showJoinError("Não encontrei essa sala. Confira o código.");
-  if (snap.data().status !== "lobby") return showJoinError("Essa sala já começou o jogo.");
+  const s = snap.data();
+  if (s.status === "ended") return showJoinError("Essa sala já foi encerrada.");
+  if (s.status !== "lobby" && !lateJoinAllowed(s.questions, s.currentIndex)) {
+    return showJoinError("Esse quiz já passou da metade — não dá mais pra entrar agora.");
+  }
   joinCodeValue = c;
   joinNameValue = nm;
   view = "avatar";
@@ -140,7 +158,12 @@ async function joinRoom() {
   code = c; playerId = pid; playerName = nm;
   localStorage.setItem("quiz-player", JSON.stringify({ code, playerId, name: nm, avatar: avatarDraft }));
   sessionData = snap.data();
-  view = "wait";
+  lastIndexAnswered = sessionData.status === "lobby" ? -1 : sessionData.currentIndex;
+  if (sessionData.status === "question") {
+    const ansSnap = await getDoc(doc(db, "sessions", code, "answers", `${sessionData.currentIndex}_${playerId}`));
+    hasAnswered = ansSnap.exists();
+  }
+  view = viewForStatus(sessionData.status);
   subscribeSession();
   render();
 }
@@ -179,13 +202,24 @@ let liveTimerInt = null;
 function render() {
   clearInterval(liveTimerInt);
   root.className = "container";
-  if (view === "join") return renderJoin();
-  if (view === "avatar") return renderAvatarPicker();
-  if (view === "wait") return renderWait();
-  if (view === "question") return renderQuestion();
-  if (view === "reveal") return renderReveal();
-  if (view === "leaderboard") return renderLeaderboard();
-  if (view === "end") return renderEnd();
+  try {
+    if (view === "join") return renderJoin();
+    if (view === "avatar") return renderAvatarPicker();
+    if (view === "wait") return renderWait();
+    if (view === "question") return renderQuestion();
+    if (view === "reveal") return renderReveal();
+    if (view === "leaderboard") return renderLeaderboard();
+    if (view === "end") return renderEnd();
+  } catch (err) {
+    console.error("Erro ao desenhar a tela:", err);
+    root.innerHTML = `
+      <div class="eyebrow" style="color:var(--coral);">algo deu errado</div>
+      <h1 style="font-size:20px; margin-top:6px;">Não consegui carregar essa tela</h1>
+      <p style="color:var(--text-dim); margin-top:8px; font-size:13px;">Tenta recarregar a página. Se continuar, avisa o organizador.</p>
+      <button class="btn btn-primary btn-block" id="reload-btn" style="margin-top:18px;">Recarregar</button>
+    `;
+    document.getElementById("reload-btn")?.addEventListener("click", () => window.location.reload());
+  }
 }
 
 function renderJoin() {
@@ -274,6 +308,7 @@ function renderQuestion() {
 
   root.innerHTML = `
     <div class="eyebrow" id="timer-label">carregando...</div>
+    ${q.pointsMultiplier > 1 ? `<div style="color:var(--gold); font-size:12px; font-weight:700; margin-top:4px;">🎁 pergunta bônus · vale ${q.pointsMultiplier}x</div>` : ""}
     ${q.imageUrl ? `<img class="q-image" src="${q.imageUrl}" />` : ""}
     <h2 style="font-size:19px; margin:10px 0 14px;">${escapeHtml(q.text)}</h2>
     <div style="display:flex; flex-direction:column; gap:10px;" id="options"></div>
@@ -378,7 +413,7 @@ async function downloadMyReportPdf() {
     const sel = [...(ans.selected || [])].sort().join(",");
     const cor = [...q.correct].sort().join(",");
     const correct = sel === cor && sel !== "";
-    const pts = correct ? kahootPoints(ans.timeMs, q.timeLimit) : 0;
+    const pts = correct ? kahootPoints(ans.timeMs, q.timeLimit, q.pointsMultiplier || 1) : 0;
     rows.push([
       q.text,
       (ans.selected || []).map((i) => q.options[i]).join(", "),

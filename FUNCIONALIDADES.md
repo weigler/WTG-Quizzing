@@ -29,6 +29,15 @@ quiz fica salvo e pode ser reaberto quantas vezes quiser.
   Kahoot
 - Cada pergunta pode ter uma imagem de capa, buscada direto do banco de
   fotos Unsplash
+- Perguntas podem ser marcadas como **bônus**, valendo 2x ou 3x a
+  pontuação normal — útil pra compensar quem entrar depois do início
+
+### Entrada tardia
+Se alguém entrar depois que o jogo já começou, o app calcula se ainda
+resta mais da metade da pontuação total em disputa (contando os
+multiplicadores de bônus). Se sim, a pessoa entra e já participa das
+próximas perguntas; se o quiz já passou do meio, a entrada é bloqueada —
+pra manter o jogo justo pra quem começou desde o início.
 
 ### Sala ao vivo
 Ao abrir um quiz, o app gera um **código de 6 dígitos** — e também um
