@@ -219,12 +219,11 @@ function renderEditor() {
 
     <div id="question-list"></div>
 
+    ${questionEditingIdx === null ? `
     <div class="card" style="margin-top:6px;">
-      <div style="font-weight:700; margin-bottom:12px; font-family:var(--font-display);" id="draft-heading">
-        ${questionEditingIdx === null ? "Nova pergunta" : "Editar pergunta"}
-      </div>
+      <div style="font-weight:700; margin-bottom:12px; font-family:var(--font-display);">Nova pergunta</div>
       <div id="question-form"></div>
-    </div>
+    </div>` : ""}
 
     <button class="btn btn-success btn-block" id="save-quiz-btn" style="margin-top:22px;">Salvar quiz</button>
     <div id="editor-error" class="error-text"></div>
@@ -252,11 +251,20 @@ function renderEditor() {
 function renderQuestionList() {
   const q = quizDraft;
   const el = document.getElementById("question-list");
-  if (!q.questions.length) {
+  if (!q.questions.length && questionEditingIdx === null) {
     el.innerHTML = `<div style="color:var(--text-dim); margin-bottom:16px; font-size:13px;">Nenhuma pergunta ainda — adicione abaixo.</div>`;
     return;
   }
-  el.innerHTML = q.questions.map((item, i) => `
+  el.innerHTML = q.questions.map((item, i) => {
+    if (i === questionEditingIdx) {
+      return `
+        <div class="card" style="margin-bottom:10px; border-color:var(--gold);">
+          <div style="font-weight:700; margin-bottom:12px; font-family:var(--font-display); color:var(--gold);">Editando pergunta ${i + 1}</div>
+          <div id="question-form"></div>
+        </div>
+      `;
+    }
+    return `
     <div class="q-row">
       ${item.imageUrl ? `<img src="${item.imageUrl}" />` : ""}
       <div class="info">
@@ -266,8 +274,10 @@ function renderQuestionList() {
       <button class="btn-link" id="qedit-${i}">editar</button>
       <button class="btn-link" id="qdel-${i}" style="color:var(--coral);">excluir</button>
     </div>
-  `).join("");
+  `;
+  }).join("");
   q.questions.forEach((_, i) => {
+    if (i === questionEditingIdx) return;
     document.getElementById(`qedit-${i}`).onclick = () => {
       questionDraft = JSON.parse(JSON.stringify(q.questions[i]));
       questionEditingIdx = i;
@@ -275,6 +285,7 @@ function renderQuestionList() {
     };
     document.getElementById(`qdel-${i}`).onclick = () => {
       q.questions.splice(i, 1);
+      if (questionEditingIdx !== null && i < questionEditingIdx) questionEditingIdx -= 1;
       renderEditor();
     };
   });
@@ -349,7 +360,9 @@ function renderQuestionForm() {
   });
   document.getElementById("q-save").onclick = saveQuestionDraft;
   document.getElementById("q-cancel")?.addEventListener("click", () => {
-    questionDraft = emptyQuestion(quizDraft.defaultTimeLimit || 20); questionEditingIdx = null; renderQuestionForm(); document.getElementById("draft-heading").textContent = "Nova pergunta";
+    questionDraft = emptyQuestion(quizDraft.defaultTimeLimit || 20);
+    questionEditingIdx = null;
+    renderEditor();
   });
 }
 
@@ -552,7 +565,7 @@ function renderLobby() {
     <p style="color:var(--text-dim); text-align:center;">Peça pra galera entrar com esse código, pelo celular — ou escanear o QR Code abaixo.</p>
 
     <div class="qr-box">
-      <img src="${qrImg}" width="220" height="220" alt="QR Code pra entrar na sala" />
+      <div id="qr-canvas"></div>
     </div>
     <div class="join-link-row">
       <input class="input" id="join-url" readonly value="${joinUrl}" />
@@ -573,6 +586,21 @@ function renderLobby() {
   document.getElementById("cancel-session-btn").onclick = async () => {
     await deleteSession(sessionCode, { fromControl: true });
   };
+
+  const qrEl = document.getElementById("qr-canvas");
+  qrEl.innerHTML = "";
+  if (window.QRCode) {
+    new QRCode(qrEl, {
+      text: joinUrl,
+      width: 220,
+      height: 220,
+      colorDark: "#0B0E1A",
+      colorLight: "#ffffff",
+      correctLevel: QRCode.CorrectLevel.H,
+    });
+  } else {
+    qrEl.innerHTML = `<img src="${qrImg}" width="220" height="220" alt="QR Code pra entrar na sala" />`;
+  }
 
   document.getElementById("copy-link-btn").onclick = async () => {
     const input = document.getElementById("join-url");

@@ -1,18 +1,10 @@
-const CACHE_NAME = "quiz-admin-v2";
+const CACHE_NAME = "quiz-admin-v3";
 const PRECACHE_URLS = [
-  "./",
-  "./index.html",
-  "./admin-app.js",
-  "./admin-style.css",
   "./admin-manifest.json",
   "./admin-icon-192.png",
   "./admin-icon-512.png",
   "../shared/theme.css",
-  "../shared/firebase-config.js",
-  "../shared/unsplash-config.js",
-  "../shared/avatar.js",
-  "../shared/scoring.js",
-  "../shared/pdf-helpers.js",
+  "./admin-style.css",
 ];
 
 self.addEventListener("install", (event) => {
@@ -31,13 +23,23 @@ self.addEventListener("activate", (event) => {
   self.clients.claim();
 });
 
-// network-first: tenta buscar na rede (dados sempre atualizados); se falhar
-// (sem internet), cai pro que tiver salvo em cache — só pros arquivos do
-// próprio site. Chamadas ao Firestore/Firebase não passam por aqui.
+// Código do app (.js, .html, .json) NUNCA fica em cache — vai sempre
+// direto pra rede, sem intermediário. Um JS desatualizado pode importar
+// funções que não existem mais e quebrar o app inteiro silenciosamente,
+// então preferimos falhar (mostrando nosso próprio erro) a rodar código
+// velho. Só ícones/CSS (puramente visuais) usam cache como reforço.
+const NEVER_CACHE = [".js", ".html", ".json"];
+
 self.addEventListener("fetch", (event) => {
   if (event.request.method !== "GET") return;
   const url = new URL(event.request.url);
   if (url.origin !== self.location.origin) return;
+
+  const isCode = NEVER_CACHE.some((ext) => url.pathname.endsWith(ext)) || event.request.mode === "navigate";
+  if (isCode) {
+    event.respondWith(fetch(event.request, { cache: "no-store" }));
+    return;
+  }
 
   event.respondWith(
     fetch(event.request)
