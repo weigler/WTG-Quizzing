@@ -47,8 +47,8 @@
 .quiz-card .theme-tag { font-size: 11px; color: var(--gold); text-transform: uppercase; letter-spacing: 1px; font-weight: 700; }
 .quiz-card .title { font-family: var(--font-display); font-weight: 700; font-size: 16px; }
 .quiz-card .meta { font-size: 12px; color: var(--text-dim); }
-.quiz-card .actions { display: flex; gap: 6px; margin-top: 10px; }
-.quiz-card .actions .btn { flex: 1; padding: 9px; font-size: 12px; }
+.quiz-card .actions { display: flex; gap: 6px; margin-top: 10px; flex-wrap: wrap; }
+.quiz-card .actions .btn { flex: 1; min-width: 70px; padding: 9px; font-size: 12px; }
 
 .q-row {
   display: flex; align-items: center; gap: 10px;

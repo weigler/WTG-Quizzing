@@ -31,6 +31,7 @@ let hasAnswered = false;
 let lastIndexAnswered = -1;
 let unsubSession = null;
 let unsubScore = null;
+let liveTimerInt = null;
 
 /* tenta retomar sessão salva no navegador (se a pessoa recarregar a página) —
    mas só se aquela sessão ainda existir e não tiver acabado; caso
@@ -197,7 +198,6 @@ function leaveGame() {
 }
 
 /* ---------------- render ---------------- */
-let liveTimerInt = null;
 
 function render() {
   clearInterval(liveTimerInt);

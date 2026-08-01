@@ -143,6 +143,7 @@ function renderList() {
   quizzes.forEach((q) => {
     document.getElementById(`edit-${q.id}`)?.addEventListener("click", () => { quizDraft = JSON.parse(JSON.stringify(q)); view = "editor"; render(); });
     document.getElementById(`open-${q.id}`)?.addEventListener("click", () => launchSession(q));
+    document.getElementById(`dup-${q.id}`)?.addEventListener("click", () => duplicateQuiz(q));
     document.getElementById(`del-${q.id}`)?.addEventListener("click", () => deleteQuiz(q));
   });
 }
@@ -158,6 +159,7 @@ function quizCardHtml(q) {
         <div class="actions">
           <button class="btn btn-primary" id="open-${q.id}">Abrir sala</button>
           <button class="btn btn-ghost" id="edit-${q.id}">Editar</button>
+          <button class="btn btn-ghost" id="dup-${q.id}">Duplicar</button>
           <button class="btn btn-ghost" id="del-${q.id}">Excluir</button>
         </div>
       </div>
@@ -168,6 +170,27 @@ function quizCardHtml(q) {
 async function deleteQuiz(q) {
   if (!confirm(`Excluir "${q.title}"? Isso não apaga salas já jogadas, só o modelo do quiz.`)) return;
   await deleteDoc(doc(db, "quizzes", q.id));
+}
+
+async function duplicateQuiz(q) {
+  const copy = JSON.parse(JSON.stringify(q));
+  delete copy.id;
+  copy.title = `${q.title} (cópia)`;
+  copy.questions = (copy.questions || []).map((item) => ({ ...item, id: rid() }));
+  const payload = {
+    title: copy.title,
+    theme: copy.theme || "",
+    coverImage: copy.coverImage || null,
+    coverCredit: copy.coverCredit || null,
+    defaultTimeLimit: copy.defaultTimeLimit || 20,
+    questions: copy.questions,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+  const ref = await addDoc(collection(db, "quizzes"), payload);
+  quizDraft = { ...payload, id: ref.id, createdAt: null, updatedAt: null };
+  view = "editor";
+  render();
 }
 
 async function launchSession(quiz) {
@@ -272,6 +295,7 @@ function renderQuestionList() {
         <div class="text">${escapeHtml(item.text)}</div>
       </div>
       <button class="btn-link" id="qedit-${i}">editar</button>
+      <button class="btn-link" id="qdup-${i}">duplicar</button>
       <button class="btn-link" id="qdel-${i}" style="color:var(--coral);">excluir</button>
     </div>
   `;
@@ -281,6 +305,12 @@ function renderQuestionList() {
     document.getElementById(`qedit-${i}`).onclick = () => {
       questionDraft = JSON.parse(JSON.stringify(q.questions[i]));
       questionEditingIdx = i;
+      renderEditor();
+    };
+    document.getElementById(`qdup-${i}`).onclick = () => {
+      const copy = { ...JSON.parse(JSON.stringify(q.questions[i])), id: rid() };
+      q.questions.splice(i + 1, 0, copy);
+      if (questionEditingIdx !== null && i < questionEditingIdx) questionEditingIdx += 1;
       renderEditor();
     };
     document.getElementById(`qdel-${i}`).onclick = () => {
@@ -311,9 +341,9 @@ function renderQuestionForm() {
     <textarea class="input" id="q-text" placeholder="Escreva a pergunta..." style="min-height:60px; margin-bottom:12px;">${escapeHtml(d.text)}</textarea>
 
     <div style="display:flex; gap:10px; margin-bottom:12px; flex-wrap:wrap;">
-      <select class="input" id="q-type" style="flex:1; min-width:160px;">
+      <select class="input" id="q-type" style="flex:0 1 180px; min-width:150px;">
         <option value="single" ${d.type === "single" ? "selected" : ""}>Escolha única</option>
-        <option value="multiple" ${d.type === "multiple" ? "selected" : ""}>Múltipla escolha (2+ certas)</option>
+        <option value="multiple" ${d.type === "multiple" ? "selected" : ""}>Múltipla escolha</option>
         <option value="tf" ${d.type === "tf" ? "selected" : ""}>Verdadeiro ou Falso</option>
       </select>
       <div style="display:flex; align-items:center; gap:8px; color:var(--text-dim); font-size:13px;">
@@ -322,10 +352,10 @@ function renderQuestionForm() {
       </div>
       <div style="display:flex; align-items:center; gap:8px; color:var(--text-dim); font-size:13px;">
         <span>pontuação</span>
-        <select class="input" id="q-multiplier" style="width:110px;">
-          <option value="1" ${(d.pointsMultiplier || 1) === 1 ? "selected" : ""}>normal (1x)</option>
-          <option value="2" ${(d.pointsMultiplier || 1) === 2 ? "selected" : ""}>bônus (2x)</option>
-          <option value="3" ${(d.pointsMultiplier || 1) === 3 ? "selected" : ""}>bônus (3x)</option>
+        <select class="input" id="q-multiplier" style="width:135px; padding-right:8px;">
+          <option value="1" ${(d.pointsMultiplier || 1) === 1 ? "selected" : ""}>1x normal</option>
+          <option value="2" ${(d.pointsMultiplier || 1) === 2 ? "selected" : ""}>2x bônus</option>
+          <option value="3" ${(d.pointsMultiplier || 1) === 3 ? "selected" : ""}>3x bônus</option>
         </select>
       </div>
     </div>
