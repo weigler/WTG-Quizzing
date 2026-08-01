@@ -15,6 +15,19 @@ real, com placar ao vivo.
 
 ## O app Admin (quem organiza)
 
+### Importar perguntas
+Em vez de cadastrar uma por uma, dá pra colar um texto com várias
+perguntas de uma vez (formato simples, com um modelo pronto pra copiar) ou
+um JSON — o app reconhece automaticamente pergunta, opções, resposta
+certa, tempo e bônus. Útil pra trazer perguntas geradas por outras
+ferramentas (NotebookLM, ChatGPT etc.): é só pedir pra IA reescrever o
+conteúdo no formato do modelo e colar aqui.
+
+### Duplicar
+Tanto quizzes inteiros (na lista) quanto perguntas individuais (dentro do
+editor) podem ser duplicados com um clique — acelera montar variações ou
+perguntas parecidas.
+
 ### Cadastro de quizzes
 Dá pra criar quantos quizzes quiser, com temas diferentes — um sobre um
 livro, outro só de curiosidades, outro pra uma data comemorativa. Cada

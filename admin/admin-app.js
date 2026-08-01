@@ -12,6 +12,7 @@ import { UNSPLASH_ACCESS_KEY } from "../shared/unsplash-config.js";
 import { avatarSVG } from "../shared/avatar.js";
 import { kahootPoints, questionMaxPoints } from "../shared/scoring.js";
 import { getJsPDF, addPdfHeader, addSectionTitle, AUTOTABLE_THEME } from "../shared/pdf-helpers.js";
+import { parseQuizText, IMPORT_TEMPLATE } from "../shared/import-parser.js";
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
@@ -240,6 +241,11 @@ function renderEditor() {
       <button type="button" class="btn-link" id="apply-time-all" style="margin-left:auto;">aplicar a todas as perguntas já criadas</button>
     </div>
 
+    <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
+      <div style="font-weight:700; font-family:var(--font-display);">Perguntas</div>
+      <button type="button" class="btn btn-ghost" id="open-import-btn" style="width:auto; padding:8px 14px; font-size:13px;">Importar perguntas</button>
+    </div>
+
     <div id="question-list"></div>
 
     ${questionEditingIdx === null ? `
@@ -265,6 +271,7 @@ function renderEditor() {
   };
   document.getElementById("cover-pick-btn").onclick = () => openUnsplash("cover");
   document.getElementById("save-quiz-btn").onclick = saveQuiz;
+  document.getElementById("open-import-btn").onclick = openImportModal;
 
   renderQuestionList();
   if (!questionDraft) questionDraft = emptyQuestion(q.defaultTimeLimit || 20);
@@ -294,6 +301,10 @@ function renderQuestionList() {
         <div class="meta">${i + 1}. ${typeLabel(item.type)} · ${item.timeLimit}s${item.pointsMultiplier > 1 ? ` · <span style="color:var(--gold);">bônus ${item.pointsMultiplier}x</span>` : ""}</div>
         <div class="text">${escapeHtml(item.text)}</div>
       </div>
+      <div class="reorder-btns">
+        <button class="btn-link" id="qup-${i}" ${i === 0 ? "disabled" : ""} title="mover pra cima">▲</button>
+        <button class="btn-link" id="qdown-${i}" ${i === q.questions.length - 1 ? "disabled" : ""} title="mover pra baixo">▼</button>
+      </div>
       <button class="btn-link" id="qedit-${i}">editar</button>
       <button class="btn-link" id="qdup-${i}">duplicar</button>
       <button class="btn-link" id="qdel-${i}" style="color:var(--coral);">excluir</button>
@@ -313,12 +324,23 @@ function renderQuestionList() {
       if (questionEditingIdx !== null && i < questionEditingIdx) questionEditingIdx += 1;
       renderEditor();
     };
+    document.getElementById(`qup-${i}`).onclick = () => moveQuestion(i, i - 1);
+    document.getElementById(`qdown-${i}`).onclick = () => moveQuestion(i, i + 1);
     document.getElementById(`qdel-${i}`).onclick = () => {
       q.questions.splice(i, 1);
       if (questionEditingIdx !== null && i < questionEditingIdx) questionEditingIdx -= 1;
       renderEditor();
     };
   });
+}
+
+function moveQuestion(i, target) {
+  const list = quizDraft.questions;
+  if (target < 0 || target >= list.length) return;
+  [list[i], list[target]] = [list[target], list[i]];
+  if (questionEditingIdx === i) questionEditingIdx = target;
+  else if (questionEditingIdx === target) questionEditingIdx = i;
+  renderEditor();
 }
 
 function typeLabel(t) {
@@ -396,6 +418,15 @@ function renderQuestionForm() {
   });
 }
 
+function moveOption(i, delta) {
+  const d = questionDraft;
+  const target = i + delta;
+  if (target < 0 || target >= d.options.length) return;
+  [d.options[i], d.options[target]] = [d.options[target], d.options[i]];
+  d.correct = d.correct.map((c) => (c === i ? target : c === target ? i : c));
+  renderOptionRows();
+}
+
 function renderOptionRows() {
   const d = questionDraft;
   const el = document.getElementById("q-options");
@@ -416,6 +447,8 @@ function renderOptionRows() {
       <span class="swatch ${OPTION_COLORS[i % 6]}"><span class="${OPTION_SHAPES[i % 6]}" style="width:11px;height:11px;"></span></span>
       <input class="input" data-opt="${i}" placeholder="Opção ${i + 1}" value="${escapeAttr(opt)}" style="flex:1;" />
       <label class="check-label"><input type="checkbox" data-correct="${i}" ${d.correct.includes(i) ? "checked" : ""}/> certa</label>
+      <button type="button" class="btn-link" data-moveup="${i}" ${i === 0 ? "disabled" : ""} title="mover pra cima">▲</button>
+      <button type="button" class="btn-link" data-movedown="${i}" ${i === d.options.length - 1 ? "disabled" : ""} title="mover pra baixo">▼</button>
       ${d.options.length > 2 ? `<button type="button" class="btn-link" data-remove="${i}">✕</button>` : ""}
     </div>
   `).join("");
@@ -433,6 +466,12 @@ function renderOptionRows() {
       }
       renderOptionRows();
     };
+  });
+  el.querySelectorAll("[data-moveup]").forEach((btn) => {
+    btn.onclick = () => moveOption(Number(btn.dataset.moveup), -1);
+  });
+  el.querySelectorAll("[data-movedown]").forEach((btn) => {
+    btn.onclick = () => moveOption(Number(btn.dataset.movedown), 1);
   });
   el.querySelectorAll("[data-remove]").forEach((btn) => {
     btn.onclick = () => {
@@ -483,6 +522,72 @@ async function saveQuiz() {
   }
   view = "list";
   render();
+}
+
+/* ================= IMPORTAR PERGUNTAS ================= */
+let importResult = null;
+
+function openImportModal() {
+  importResult = null;
+  document.getElementById("import-modal").style.display = "flex";
+  document.getElementById("import-template-preview").textContent = IMPORT_TEMPLATE;
+  document.getElementById("import-textarea").value = "";
+  document.getElementById("import-step-paste").style.display = "block";
+  document.getElementById("import-step-preview").style.display = "none";
+}
+document.getElementById("import-close").onclick = () => (document.getElementById("import-modal").style.display = "none");
+document.getElementById("import-copy-template").onclick = async () => {
+  try {
+    await navigator.clipboard.writeText(IMPORT_TEMPLATE);
+    const btn = document.getElementById("import-copy-template");
+    const original = btn.textContent;
+    btn.textContent = "copiado!";
+    setTimeout(() => (btn.textContent = original), 1500);
+  } catch { /* clipboard indisponível, sem problema */ }
+};
+document.getElementById("import-back-btn").onclick = () => {
+  document.getElementById("import-step-paste").style.display = "block";
+  document.getElementById("import-step-preview").style.display = "none";
+};
+document.getElementById("import-convert-btn").onclick = () => {
+  const raw = document.getElementById("import-textarea").value;
+  importResult = parseQuizText(raw);
+  renderImportPreview();
+  document.getElementById("import-step-paste").style.display = "none";
+  document.getElementById("import-step-preview").style.display = "block";
+};
+document.getElementById("import-confirm-btn").onclick = () => {
+  if (!importResult || importResult.questions.length === 0) return;
+  const defaultTime = quizDraft.defaultTimeLimit || 20;
+  importResult.questions.forEach((qq) => {
+    if (!qq.timeLimit) qq.timeLimit = defaultTime;
+    quizDraft.questions.push(qq);
+  });
+  document.getElementById("import-modal").style.display = "none";
+  renderEditor();
+};
+
+function renderImportPreview() {
+  const { questions, warnings } = importResult;
+  document.getElementById("import-summary").innerHTML =
+    `<b style="color:var(--gold);">${questions.length}</b> pergunta${questions.length !== 1 ? "s" : ""} reconhecida${questions.length !== 1 ? "s" : ""}` +
+    (warnings.length ? `, <b style="color:var(--coral);">${warnings.length}</b> ignorada${warnings.length !== 1 ? "s" : ""}` : "");
+
+  document.getElementById("import-warnings").innerHTML = warnings.length
+    ? `<div style="background:var(--bg2); border:1px solid var(--surface-line); border-radius:10px; padding:10px; font-size:12px; color:var(--coral);">${warnings.map(escapeHtml).join("<br>")}</div>`
+    : "";
+
+  document.getElementById("import-preview-list").innerHTML = questions.map((qq, i) => `
+    <div class="q-row">
+      <div class="info">
+        <div class="meta">${i + 1}. ${typeLabel(qq.type)}${qq.pointsMultiplier > 1 ? ` · bônus ${qq.pointsMultiplier}x` : ""}</div>
+        <div class="text">${escapeHtml(qq.text)}</div>
+        <div class="meta" style="margin-top:2px;">${qq.options.map((o, oi) => `${qq.correct.includes(oi) ? "✓ " : ""}${escapeHtml(o)}`).join(" · ")}</div>
+      </div>
+    </div>
+  `).join("") || `<div style="color:var(--text-dim); font-size:13px;">Nenhuma pergunta reconhecida — confira o formato e tenta de novo.</div>`;
+
+  document.getElementById("import-confirm-btn").disabled = questions.length === 0;
 }
 
 /* ================= BUSCA UNSPLASH ================= */

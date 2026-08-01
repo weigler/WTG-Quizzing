@@ -53,6 +53,39 @@
     </div>
   </div>
 
+  <!-- modal de importação de perguntas -->
+  <div id="import-modal" class="modal-overlay" style="display:none;">
+    <div class="modal-box" style="max-width:640px;">
+      <div class="modal-header" style="justify-content:space-between;">
+        <div style="font-weight:700; font-family:var(--font-display);">Importar perguntas</div>
+        <button id="import-close" class="btn-link">fechar</button>
+      </div>
+      <div id="import-step-paste">
+        <p style="font-size:13px; color:var(--text-dim); margin:0 0 10px;">
+          Cole o texto das perguntas abaixo (formato simples, veja o modelo) ou um JSON.
+          Pra transformar conteúdo de outro lugar (como o NotebookLM) nesse formato, copie o
+          texto de lá e peça pra uma IA reescrever seguindo o modelo.
+        </p>
+        <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:6px;">
+          <span style="font-size:12px; color:var(--text-dim);">modelo de formato</span>
+          <button id="import-copy-template" class="btn-link">copiar modelo</button>
+        </div>
+        <pre id="import-template-preview" style="background:var(--bg2); border:1px solid var(--surface-line); border-radius:10px; padding:10px; font-size:11px; color:var(--text-dim); max-height:120px; overflow:auto; white-space:pre-wrap;"></pre>
+        <textarea class="input" id="import-textarea" placeholder="Cole aqui o texto das perguntas..." style="min-height:160px; margin-top:10px;"></textarea>
+        <button class="btn btn-primary btn-block" id="import-convert-btn" style="margin-top:12px;">Converter</button>
+      </div>
+      <div id="import-step-preview" style="display:none;">
+        <div id="import-summary" style="margin-bottom:10px; font-size:13px;"></div>
+        <div id="import-warnings" style="margin-bottom:10px;"></div>
+        <div id="import-preview-list" style="max-height:260px; overflow-y:auto;"></div>
+        <div style="display:flex; gap:10px; margin-top:14px;">
+          <button class="btn btn-primary" id="import-confirm-btn" style="flex:1;">Adicionar ao quiz</button>
+          <button class="btn btn-ghost" id="import-back-btn">voltar</button>
+        </div>
+      </div>
+    </div>
+  </div>
+
   <script src="https://cdnjs.cloudflare.com/ajax/libs/qrcodejs/1.0.0/qrcode.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
   <script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf-autotable/3.8.2/jspdf.plugin.autotable.min.js"></script>
