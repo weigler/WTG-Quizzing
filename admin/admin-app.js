@@ -39,6 +39,8 @@ let sessionsList = [];
 let unsubSessionsList = null;
 let reportData = null;     // relatório carregado pra exibição
 
+let currentUser = null;    // usuário logado (dono dos quizzes/sessões)
+
 const OPTION_COLORS = ["opt-0", "opt-1", "opt-2", "opt-3", "opt-4", "opt-5"];
 const OPTION_SHAPES = ["opt-diamond", "opt-triangle", "opt-circle", "opt-square", "opt-pentagon", "opt-hexagon"];
 
@@ -48,7 +50,9 @@ const root = document.getElementById("app-root");
 onAuthStateChanged(auth, (user) => {
   document.getElementById("login-screen").style.display = user ? "none" : "flex";
   document.getElementById("app-screen").style.display = user ? "flex" : "none";
+  currentUser = user;
   if (user) {
+    document.getElementById("current-user-email").textContent = user.email || "";
     view = "list";
     subscribeQuizzes();
     render();
@@ -57,6 +61,8 @@ onAuthStateChanged(auth, (user) => {
     unsubSession && unsubSession();
     unsubPlayers && unsubPlayers();
     unsubSessionsList && unsubSessionsList();
+    quizzes = [];
+    sessionsList = [];
   }
 });
 
@@ -88,7 +94,7 @@ function emptyQuiz() {
 
 function subscribeQuizzes() {
   unsubQuizzes && unsubQuizzes();
-  unsubQuizzes = onSnapshot(collection(db, "quizzes"), (snap) => {
+  unsubQuizzes = onSnapshot(query(collection(db, "quizzes"), where("ownerId", "==", currentUser.uid)), (snap) => {
     quizzes = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
     if (view === "list") render();
   });
@@ -138,15 +144,42 @@ function renderList() {
     <div class="quiz-grid">
       ${quizzes.map(quizCardHtml).join("") || `<div style="color:var(--text-dim); margin-top:20px;">Nenhum quiz ainda. Crie o primeiro!</div>`}
     </div>
+    <button class="btn-link" id="migrate-link" style="margin-top:26px; font-size:11px;">avançado: migrar quizzes/sessões antigas pra minha conta</button>
   `;
   bindNavTabs();
   document.getElementById("new-quiz-btn").onclick = () => { quizDraft = emptyQuiz(); view = "editor"; render(); };
+  document.getElementById("migrate-link").onclick = migrateOwnership;
   quizzes.forEach((q) => {
     document.getElementById(`edit-${q.id}`)?.addEventListener("click", () => { quizDraft = JSON.parse(JSON.stringify(q)); view = "editor"; render(); });
     document.getElementById(`open-${q.id}`)?.addEventListener("click", () => launchSession(q));
     document.getElementById(`dup-${q.id}`)?.addEventListener("click", () => duplicateQuiz(q));
     document.getElementById(`del-${q.id}`)?.addEventListener("click", () => deleteQuiz(q));
   });
+}
+
+// Ferramenta de uso único: marca como "meus" todos os quizzes/sessões que
+// ainda não têm dono (criados antes de existir o sistema de contas
+// separadas). Só funciona enquanto as regras do Firestore ainda
+// permitirem leitura ampla — depois de travar as regras por dono, não é
+// mais necessária nem funciona.
+async function migrateOwnership() {
+  if (!confirm("Isso marca como SEUS todos os quizzes e sessões que ainda não têm dono definido. Rode isso só uma vez, antes de publicar as novas regras do Firestore. Continuar?")) return;
+  try {
+    const qSnap = await getDocs(collection(db, "quizzes"));
+    let qCount = 0;
+    for (const d of qSnap.docs) {
+      if (!d.data().ownerId) { await updateDoc(d.ref, { ownerId: currentUser.uid }); qCount++; }
+    }
+    const sSnap = await getDocs(collection(db, "sessions"));
+    let sCount = 0;
+    for (const d of sSnap.docs) {
+      if (!d.data().ownerId) { await updateDoc(d.ref, { ownerId: currentUser.uid }); sCount++; }
+    }
+    alert(`Pronto! ${qCount} quiz(zes) e ${sCount} sessão(ões) marcados como seus.`);
+    subscribeQuizzes();
+  } catch (err) {
+    alert("Não consegui migrar — provavelmente as regras do Firestore já foram atualizadas (e essa ferramenta não é mais necessária).");
+  }
 }
 
 function quizCardHtml(q) {
@@ -181,6 +214,7 @@ async function duplicateQuiz(q) {
   const payload = {
     title: copy.title,
     theme: copy.theme || "",
+    ownerId: currentUser.uid,
     coverImage: copy.coverImage || null,
     coverCredit: copy.coverCredit || null,
     defaultTimeLimit: copy.defaultTimeLimit || 20,
@@ -205,6 +239,7 @@ async function launchSession(quiz) {
   const session = {
     quizId: quiz.id,
     title: quiz.title,
+    ownerId: currentUser.uid,
     status: "lobby",
     questions: quiz.questions,
     currentIndex: -1,
@@ -518,7 +553,7 @@ async function saveQuiz() {
   if (q.id) {
     await updateDoc(doc(db, "quizzes", q.id), payload);
   } else {
-    await addDoc(collection(db, "quizzes"), { ...payload, createdAt: serverTimestamp() });
+    await addDoc(collection(db, "quizzes"), { ...payload, ownerId: currentUser.uid, createdAt: serverTimestamp() });
   }
   view = "list";
   render();
@@ -936,10 +971,13 @@ function renderEnded() {
 /* ================= SESSÕES (HISTÓRICO) ================= */
 function subscribeSessionsList() {
   unsubSessionsList && unsubSessionsList();
-  unsubSessionsList = onSnapshot(query(collection(db, "sessions"), orderBy("createdAt", "desc")), (snap) => {
-    sessionsList = snap.docs.map((d) => ({ code: d.id, ...d.data() }));
-    if (view === "sessions") render();
-  });
+  unsubSessionsList = onSnapshot(
+    query(collection(db, "sessions"), where("ownerId", "==", currentUser.uid), orderBy("createdAt", "desc")),
+    (snap) => {
+      sessionsList = snap.docs.map((d) => ({ code: d.id, ...d.data() }));
+      if (view === "sessions") render();
+    }
+  );
 }
 
 const STATUS_LABEL = { lobby: "aguardando", question: "em andamento", reveal: "em andamento", leaderboard: "em andamento", ended: "encerrada" };

@@ -197,6 +197,16 @@ function leaveGame() {
   render();
 }
 
+// usado só depois que o jogo termina: em vez de voltar pra tela de
+// código (dentro do site do jogo), manda pra página inicial de verdade —
+// o jogo já acabou, não faz sentido oferecer "digitar outro código" aqui.
+function goHome() {
+  unsubSession && unsubSession();
+  unsubScore && unsubScore();
+  localStorage.removeItem("quiz-player");
+  window.location.href = "../index.html";
+}
+
 /* ---------------- render ---------------- */
 
 function render() {
@@ -387,10 +397,10 @@ function renderEnd() {
     <h1 style="font-size:24px; margin-top:10px;">Fim de jogo!</h1>
     ${myRank >= 0 ? `<p style="color:var(--text-dim); margin-top:6px;">Você terminou em <b style="color:var(--gold);">${myRank + 1}º lugar</b> com ${final[myRank].total} pontos</p>` : ""}
     <button class="btn btn-primary btn-block" id="pdf-btn" style="margin-top:22px;">Baixar meu resultado em PDF</button>
-    <button class="btn btn-ghost btn-block" id="leave-btn" style="margin-top:10px;">Sair</button>
+    <button class="btn btn-ghost btn-block" id="leave-btn" style="margin-top:10px;">Voltar ao início</button>
   `;
   document.getElementById("pdf-btn").onclick = downloadMyReportPdf;
-  document.getElementById("leave-btn").onclick = leaveGame;
+  document.getElementById("leave-btn").onclick = goHome;
   localStorage.removeItem("quiz-player");
 }
 
@@ -401,58 +411,63 @@ async function downloadMyReportPdf() {
   const btn = document.getElementById("pdf-btn");
   if (btn) { btn.disabled = true; btn.textContent = "Gerando PDF..."; }
 
-  const rows = [];
-  for (let idx = 0; idx < s.questions.length; idx++) {
-    const q = s.questions[idx];
-    const snap = await getDoc(doc(db, "sessions", code, "answers", `${idx}_${playerId}`));
-    if (!snap.exists()) {
-      rows.push([q.text, "não respondeu", "—", "não", "0"]);
-      continue;
-    }
-    const ans = snap.data();
-    const sel = [...(ans.selected || [])].sort().join(",");
-    const cor = [...q.correct].sort().join(",");
-    const correct = sel === cor && sel !== "";
-    const pts = correct ? kahootPoints(ans.timeMs, q.timeLimit, q.pointsMultiplier || 1) : 0;
-    rows.push([
-      q.text,
-      (ans.selected || []).map((i) => q.options[i]).join(", "),
-      `${(ans.timeMs / 1000).toFixed(1)}s`,
-      correct ? "sim" : "não",
-      correct ? `+${pts}` : "0",
-    ]);
-  }
-
-  const final = s.finalLeaderboard || [];
-  const myRank = final.findIndex((p) => p.id === playerId);
-  const total = myRank >= 0 ? final[myRank].total : (myScore?.total ?? 0);
-
-  const doc_ = new jsPDF();
-  let y = addPdfHeader(doc_, { eyebrow: "meu resultado", title: s.title, subtitle: playerName });
-
   try {
-    const png = await avatarPngDataUrl(avatarDraft, 200);
-    doc_.addImage(png, "PNG", 14, y, 26, 26);
-  } catch { /* segue sem avatar se algo falhar */ }
+    const snaps = await Promise.all(
+      s.questions.map((_, idx) => getDoc(doc(db, "sessions", code, "answers", `${idx}_${playerId}`)))
+    );
 
-  doc_.setFontSize(22);
-  doc_.setTextColor(26, 22, 10);
-  doc_.text(`${total} pontos`, 46, y + 12);
-  doc_.setFontSize(11);
-  doc_.setTextColor(110, 110, 120);
-  doc_.text(myRank >= 0 ? `${myRank + 1}º lugar de ${final.length}` : "", 46, y + 20);
-  y += 36;
+    const rows = s.questions.map((q, idx) => {
+      const snap = snaps[idx];
+      if (!snap.exists()) return [q.text, "não respondeu", "—", "não", "0"];
+      const ans = snap.data();
+      const sel = [...(ans.selected || [])].sort().join(",");
+      const cor = [...(q.correct || [])].sort().join(",");
+      const correct = sel === cor && sel !== "";
+      const pts = correct ? kahootPoints(ans.timeMs, q.timeLimit, q.pointsMultiplier || 1) : 0;
+      return [
+        q.text,
+        (ans.selected || []).map((i) => q.options[i]).join(", "),
+        `${((ans.timeMs || 0) / 1000).toFixed(1)}s`,
+        correct ? "sim" : "não",
+        correct ? `+${pts}` : "0",
+      ];
+    });
 
-  y = addSectionTitle(doc_, "Pergunta a pergunta", y);
-  doc_.autoTable({
-    startY: y,
-    head: [["Pergunta", "Sua resposta", "Tempo", "Certo?", "Pontos"]],
-    body: rows,
-    columnStyles: { 0: { cellWidth: 60 } },
-    ...AUTOTABLE_THEME,
-    margin: { left: 14, right: 14 },
-  });
+    const final = s.finalLeaderboard || [];
+    const myRank = final.findIndex((p) => p.id === playerId);
+    const total = myRank >= 0 ? final[myRank].total : (myScore?.total ?? 0);
 
-  doc_.save(`meu-resultado-${code}.pdf`);
-  if (btn) { btn.disabled = false; btn.textContent = "Baixar meu resultado em PDF"; }
+    const doc_ = new jsPDF();
+    let y = addPdfHeader(doc_, { eyebrow: "meu resultado", title: s.title, subtitle: playerName });
+
+    try {
+      const png = await avatarPngDataUrl(avatarDraft, 200);
+      doc_.addImage(png, "PNG", 14, y, 26, 26);
+    } catch { /* segue sem avatar se algo falhar */ }
+
+    doc_.setFontSize(22);
+    doc_.setTextColor(26, 22, 10);
+    doc_.text(`${total} pontos`, 46, y + 12);
+    doc_.setFontSize(11);
+    doc_.setTextColor(110, 110, 120);
+    doc_.text(myRank >= 0 ? `${myRank + 1}º lugar de ${final.length}` : "", 46, y + 20);
+    y += 36;
+
+    y = addSectionTitle(doc_, "Pergunta a pergunta", y);
+    doc_.autoTable({
+      startY: y,
+      head: [["Pergunta", "Sua resposta", "Tempo", "Certo?", "Pontos"]],
+      body: rows,
+      columnStyles: { 0: { cellWidth: 60 } },
+      ...AUTOTABLE_THEME,
+      margin: { left: 14, right: 14 },
+    });
+
+    doc_.save(`meu-resultado-${code}.pdf`);
+  } catch (err) {
+    console.error("Erro ao gerar PDF:", err);
+    alert("Não consegui gerar o PDF agora. Tenta de novo em alguns segundos.");
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "Baixar meu resultado em PDF"; }
+  }
 }

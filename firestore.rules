@@ -2,46 +2,62 @@ rules_version = '2';
 service cloud.firestore {
   match /databases/{database}/documents {
 
-    // Modelos de quiz: só o admin autenticado lê e escreve.
-    // O site jogo/ nunca acessa essa coleção diretamente — ele só
-    // enxerga uma cópia das perguntas dentro da sessão ativa.
+    // Modelos de quiz: cada usuário autenticado só lê/edita/exclui os
+    // PRÓPRIOS quizzes (campo ownerId = uid de quem criou). Um amigo não
+    // vê nem consegue mexer nos quizzes de outro.
     match /quizzes/{quizId} {
-      allow read, write: if request.auth != null;
+      allow read, delete: if request.auth != null && resource.data.ownerId == request.auth.uid;
+      allow create: if request.auth != null && request.resource.data.ownerId == request.auth.uid;
+      allow update: if request.auth != null
+                    && resource.data.ownerId == request.auth.uid
+                    && request.resource.data.ownerId == resource.data.ownerId; // ninguém troca o dono depois
     }
 
     match /sessions/{code} {
       // qualquer um pode ler UMA sessão específica se souber o código
-      // (é assim que o site jogo/ funciona, sem login)
+      // (é assim que o site jogo/ funciona, sem login) — isso não muda
+      // com o dono, porque quem joga nunca está autenticado
       allow get: if true;
-      // mas ninguém de fora consegue LISTAR todas as sessões e "descobrir"
-      // códigos e respostas de salas que não são a dele — isso é só pro admin
-      allow list: if request.auth != null;
-      // só o admin controla o andamento do jogo
-      allow write: if request.auth != null;
+      // mas só o dono consegue LISTAR (ver na aba Sessões) as próprias salas
+      allow list: if request.auth != null && resource.data.ownerId == request.auth.uid;
+      allow create: if request.auth != null && request.resource.data.ownerId == request.auth.uid;
+      allow update, delete: if request.auth != null && resource.data.ownerId == request.auth.uid;
 
       match /players/{playerId} {
         allow read: if true;
         // qualquer visitante pode entrar na sala (criar seu registro de jogador),
-        // mas não pode editar o registro de ninguém — só o admin pode excluir
-        // (usado ao apagar uma sessão inteira)
+        // mas não pode editar o registro de ninguém — só o dono da sessão
+        // pode excluir (usado ao apagar uma sessão inteira)
         allow create: if true;
         allow update: if false;
-        allow delete: if request.auth != null;
+        allow delete: if request.auth != null
+                      && get(/databases/$(database)/documents/sessions/$(code)).data.ownerId == request.auth.uid;
       }
 
       match /answers/{answerId} {
-        allow read: if request.auth != null; // só o admin lê pra corrigir
+        // leitura de UM documento específico (get) é pública — é assim que
+        // o próprio jogador confere a própria resposta pra montar o PDF
+        // pessoal dele, sem precisar estar logado. Só quem já sabe o id
+        // exato (questionIndex_playerId) consegue, e só o dono da sessão
+        // consegue LISTAR todas (list) pra corrigir as respostas de todo
+        // mundo.
+        allow get: if true;
+        allow list: if request.auth != null
+                    && get(/databases/$(database)/documents/sessions/$(code)).data.ownerId == request.auth.uid;
         // qualquer visitante pode enviar sua resposta, mas o id do
         // documento (questionIndex_playerId) impede reenvio/alteração —
-        // só o admin pode excluir (usado ao apagar uma sessão inteira)
+        // só o dono pode excluir (usado ao apagar uma sessão inteira)
         allow create: if true;
         allow update: if false;
-        allow delete: if request.auth != null;
+        allow delete: if request.auth != null
+                      && get(/databases/$(database)/documents/sessions/$(code)).data.ownerId == request.auth.uid;
       }
 
       match /scores/{playerId} {
         allow read: if true; // o jogador precisa ver a própria pontuação
-        allow write: if request.auth != null; // só o admin grava pontos
+        // só o dono da sessão grava pontos
+        allow write: if request.auth != null
+                     && get(/databases/$(database)/documents/sessions/$(code)).data.ownerId == request.auth.uid;
       }
     }
   }

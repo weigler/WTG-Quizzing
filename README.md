@@ -64,6 +64,41 @@ pergunta.
    essa conta pelo console
 6. Em Firestore → Regras, cole o conteúdo de `firestore.rules` e publique
 
+### Contas separadas (multiusuário)
+
+Cada conta de admin só enxerga e controla os **próprios** quizzes e
+sessões — um amigo não vê nem consegue mexer no que é de outro. Isso é
+feito com um campo `ownerId` em cada quiz/sessão (o UID de quem criou) e
+regras do Firestore que travam leitura/escrita a esse dono.
+
+**Se você já tem quizzes cadastrados de antes**, siga esta ordem — a
+ordem importa:
+
+1. Suba o código novo (`admin-app.js`, etc.) pro GitHub Pages — **mas
+   ainda não** cole o `firestore.rules` novo no Firebase Console.
+2. Faça login com a sua conta principal e, na tela "Meus quizzes", clique
+   no linkzinho **"avançado: migrar quizzes/sessões antigas pra minha
+   conta"** (só precisa rodar uma vez). Ele marca como seus todos os
+   quizzes e sessões que ainda não têm dono.
+3. **Só depois** disso, cole o `firestore.rules` atualizado no Firebase
+   Console → Firestore Database → Regras → Publicar.
+
+Se publicar as regras novas antes de migrar, seus quizzes antigos (sem
+`ownerId`) ficam inacessíveis até você reverter as regras temporariamente
+e migrar.
+
+**Criando as contas dos seus amigos** (10, ou quantas quiser): em
+Firebase Console → Authentication → Users → **Add user**, um e-mail e
+senha por pessoa. Não existe cadastro público — só você cria essas
+contas, e cada uma só vê o que ela mesma criar depois de logada.
+
+**Possível aviso de índice:** a aba "Sessões" busca por dono e ordena por
+data ao mesmo tempo — na primeira vez que isso rodar, o Firestore pode
+recusar a consulta e mostrar, no Console do navegador (F12), um link
+pra criar um "índice composto". Se isso acontecer, é só clicar nesse link
+(ele já vem preenchido) e aguardar alguns segundos — não precisa mexer em
+nada manualmente.
+
 ### 2. Unsplash (imagens das perguntas)
 1. Crie uma conta em [unsplash.com/developers](https://unsplash.com/developers)
 2. Crie uma aplicação ("New Application")
