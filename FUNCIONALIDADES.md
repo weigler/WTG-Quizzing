@@ -56,7 +56,9 @@ ganha mais.
 Depois (ou durante) qualquer sessão, dá pra ver um relatório detalhado:
 classificação geral, e pergunta por pergunta quem respondeu o quê, se
 acertou, quanto tempo levou e quantos pontos ganhou. Exporta em **CSV** ou
-em **PDF** — de graça, sem limitar isso a um plano pago.
+em **PDF** — de graça, sem limitar isso a um plano pago. Pela mesma tela
+também dá pra **excluir** uma sessão inteira (em andamento ou já
+encerrada), removendo sala, jogadores, respostas e pontuações dela.
 
 ---
 

@@ -544,6 +544,7 @@ function renderControl() {
 function renderLobby() {
   const players = Object.values(sessionPlayers);
   const joinUrl = new URL(`../jogo/index.html?code=${sessionCode}`, window.location.href).href;
+  const qrImg = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&margin=10&data=${encodeURIComponent(joinUrl)}`;
   root.innerHTML = `
     <button class="btn-link" id="control-back">← voltar aos quizzes</button>
     <div class="eyebrow" style="text-align:center; margin-top:10px;">sala aberta · ${escapeHtml(sessionData.title)}</div>
@@ -551,7 +552,7 @@ function renderLobby() {
     <p style="color:var(--text-dim); text-align:center;">Peça pra galera entrar com esse código, pelo celular — ou escanear o QR Code abaixo.</p>
 
     <div class="qr-box">
-      <div id="qr-canvas"></div>
+      <img src="${qrImg}" width="220" height="220" alt="QR Code pra entrar na sala" />
     </div>
     <div class="join-link-row">
       <input class="input" id="join-url" readonly value="${joinUrl}" />
@@ -565,17 +566,14 @@ function renderLobby() {
       </div>
     </div>
     <button class="btn btn-primary btn-block" id="begin-btn" style="margin-top:22px;" ${players.length === 0 ? "disabled" : ""}>Começar jogo →</button>
+    <button class="btn btn-ghost btn-block" id="cancel-session-btn" style="margin-top:10px;">Cancelar e excluir esta sala</button>
   `;
   document.getElementById("control-back").onclick = () => { view = "list"; unsubSession(); unsubPlayers(); render(); };
   document.getElementById("begin-btn").onclick = beginGame;
+  document.getElementById("cancel-session-btn").onclick = async () => {
+    await deleteSession(sessionCode, { fromControl: true });
+  };
 
-  document.getElementById("qr-canvas").innerHTML = "";
-  if (window.QRCode) {
-    new QRCode(document.getElementById("qr-canvas"), {
-      text: joinUrl, width: 180, height: 180,
-      colorDark: "#0B0E1A", colorLight: "#ffffff",
-    });
-  }
   document.getElementById("copy-link-btn").onclick = async () => {
     const input = document.getElementById("join-url");
     input.select();
@@ -795,6 +793,7 @@ function renderSessions() {
             <div class="text">${escapeHtml(s.title || "")}</div>
           </div>
           <button class="btn btn-ghost" id="open-session-${s.code}">${s.status === "ended" ? "Ver relatório" : "Abrir controle"}</button>
+          <button class="btn-link" id="del-session-${s.code}" style="color:var(--coral);">excluir</button>
         </div>
       `).join("") || `<div style="color:var(--text-dim);">Nenhuma sala aberta ainda.</div>`}
     </div>
@@ -805,7 +804,30 @@ function renderSessions() {
       if (s.status === "ended") openReport(s.code);
       else openControl(s.code);
     };
+    document.getElementById(`del-session-${s.code}`).onclick = () => deleteSession(s.code);
   });
+}
+
+async function deleteSession(code, opts = {}) {
+  const label = opts.fromControl ? "esta sala" : `a sessão ${code}`;
+  if (!confirm(`Excluir ${label}? Isso remove todos os jogadores, respostas e pontuações dela. Essa ação não pode ser desfeita.`)) return;
+  try {
+    for (const sub of ["players", "answers", "scores"]) {
+      const snap = await getDocs(collection(db, "sessions", code, sub));
+      await Promise.all(snap.docs.map((d) => deleteDoc(d.ref)));
+    }
+    await deleteDoc(doc(db, "sessions", code));
+  } catch (err) {
+    alert("Não consegui excluir a sessão agora. Tenta de novo.");
+    return;
+  }
+  if (opts.fromControl) {
+    unsubSession && unsubSession();
+    unsubPlayers && unsubPlayers();
+    view = "sessions";
+    subscribeSessionsList();
+  }
+  render();
 }
 
 /* ================= RELATÓRIO COMPLETO ================= */
