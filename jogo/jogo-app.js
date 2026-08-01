@@ -358,12 +358,32 @@ function renderQuestion() {
 }
 
 function renderReveal() {
+  const s = sessionData;
+  const q = s.questions[s.currentIndex];
   const correct = myScore?.lastCorrect;
+  root.className = "container left";
   root.innerHTML = `
-    <div class="big-emoji">${hasAnswered ? (correct ? "✅" : "❌") : "⏱️"}</div>
-    <h1 style="font-size:24px; margin-top:10px;">${hasAnswered ? (correct ? "Certinho!" : "Não foi dessa vez") : "Tempo esgotado"}</h1>
-    ${myScore ? `<div style="color:var(--gold); font-weight:700; margin-top:6px;">+${myScore.lastPoints} pontos</div>` : ""}
-    <div style="color:var(--text-dim); margin-top:14px;">Total: <b style="color:var(--text);">${myScore?.total ?? 0}</b> pontos</div>
+    <div style="text-align:center;">
+      <div class="big-emoji">${hasAnswered ? (correct ? "✅" : "❌") : "⏱️"}</div>
+      <h1 style="font-size:22px; margin-top:8px;">${hasAnswered ? (correct ? "Certinho!" : "Não foi dessa vez") : "Tempo esgotado"}</h1>
+      ${myScore ? `<div style="color:var(--gold); font-weight:700; margin-top:4px;">+${myScore.lastPoints} pontos</div>` : ""}
+      <div style="color:var(--text-dim); margin:6px 0 18px;">Total: <b style="color:var(--text);">${myScore?.total ?? 0}</b> pontos</div>
+    </div>
+    <div style="display:flex; flex-direction:column; gap:10px;">
+      ${q.options.map((opt, i) => {
+        const isCorrect = q.correct.includes(i);
+        const isPicked = mySelected.includes(i);
+        const cls = isCorrect && isPicked ? "reveal-hit" : isCorrect ? "reveal-correct" : isPicked ? "reveal-miss" : "reveal-neutral";
+        const tag = isCorrect ? "certa" : isPicked ? "sua resposta" : "";
+        return `
+          <div class="reveal-option ${cls}">
+            <span class="${OPTION_SHAPES[i % 6]}"></span>
+            <span style="flex:1;">${escapeHtml(opt)}</span>
+            ${tag ? `<span class="reveal-tag">${tag}</span>` : ""}
+          </div>
+        `;
+      }).join("")}
+    </div>
   `;
 }
 

@@ -9,6 +9,17 @@
 
 .big-emoji { font-size: 48px; }
 
+.reveal-option {
+  display: flex; align-items: center; gap: 12px;
+  border-radius: var(--radius); padding: 14px 16px;
+  border: 2px solid transparent; font-weight: 700; font-size: 15px; color: var(--text);
+}
+.reveal-neutral { background: var(--surface); border-color: var(--surface-line); opacity: .5; }
+.reveal-correct { background: rgba(61, 220, 151, .16); border-color: var(--green); }
+.reveal-hit { background: rgba(61, 220, 151, .34); border-color: var(--green); box-shadow: 0 0 0 1px var(--green) inset; }
+.reveal-miss { background: rgba(255, 77, 109, .18); border-color: var(--coral); }
+.reveal-tag { margin-left: auto; font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: .5px; opacity: .8; white-space: nowrap; }
+
 .mini-avatar { width: 32px; height: 32px; flex-shrink: 0; display: flex; }
 .mini-avatar svg { width: 100%; height: 100%; }
 

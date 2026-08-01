@@ -144,11 +144,9 @@ function renderList() {
     <div class="quiz-grid">
       ${quizzes.map(quizCardHtml).join("") || `<div style="color:var(--text-dim); margin-top:20px;">Nenhum quiz ainda. Crie o primeiro!</div>`}
     </div>
-    <button class="btn-link" id="migrate-link" style="margin-top:26px; font-size:11px;">avançado: migrar quizzes/sessões antigas pra minha conta</button>
   `;
   bindNavTabs();
   document.getElementById("new-quiz-btn").onclick = () => { quizDraft = emptyQuiz(); view = "editor"; render(); };
-  document.getElementById("migrate-link").onclick = migrateOwnership;
   quizzes.forEach((q) => {
     document.getElementById(`edit-${q.id}`)?.addEventListener("click", () => { quizDraft = JSON.parse(JSON.stringify(q)); view = "editor"; render(); });
     document.getElementById(`open-${q.id}`)?.addEventListener("click", () => launchSession(q));
@@ -162,26 +160,6 @@ function renderList() {
 // separadas). Só funciona enquanto as regras do Firestore ainda
 // permitirem leitura ampla — depois de travar as regras por dono, não é
 // mais necessária nem funciona.
-async function migrateOwnership() {
-  if (!confirm("Isso marca como SEUS todos os quizzes e sessões que ainda não têm dono definido. Rode isso só uma vez, antes de publicar as novas regras do Firestore. Continuar?")) return;
-  try {
-    const qSnap = await getDocs(collection(db, "quizzes"));
-    let qCount = 0;
-    for (const d of qSnap.docs) {
-      if (!d.data().ownerId) { await updateDoc(d.ref, { ownerId: currentUser.uid }); qCount++; }
-    }
-    const sSnap = await getDocs(collection(db, "sessions"));
-    let sCount = 0;
-    for (const d of sSnap.docs) {
-      if (!d.data().ownerId) { await updateDoc(d.ref, { ownerId: currentUser.uid }); sCount++; }
-    }
-    alert(`Pronto! ${qCount} quiz(zes) e ${sCount} sessão(ões) marcados como seus.`);
-    subscribeQuizzes();
-  } catch (err) {
-    alert("Não consegui migrar — provavelmente as regras do Firestore já foram atualizadas (e essa ferramenta não é mais necessária).");
-  }
-}
-
 function quizCardHtml(q) {
   return `
     <div class="quiz-card">
@@ -815,7 +793,8 @@ function renderQuestionLive() {
       `).join("")}
     </div>
     <div id="answered-count" style="color:var(--text-dim); margin-top:18px; text-align:center;">carregando respostas...</div>
-    <button class="btn btn-primary btn-block" id="reveal-btn" style="margin-top:18px;">Revelar respostas</button>
+    <div style="color:var(--text-dim); font-size:11px; text-align:center; margin-top:2px;">revela sozinho quando todo mundo responder</div>
+    <button class="btn btn-primary btn-block" id="reveal-btn" style="margin-top:14px;">Revelar respostas agora</button>
   `;
   draw();
   liveTimerInt = setInterval(draw, 250);
@@ -824,16 +803,24 @@ function renderQuestionLive() {
 }
 
 let answeredPollInt = null;
+let autoRevealed = false;
+
 function pollAnsweredCount() {
   clearInterval(answeredPollInt);
+  autoRevealed = false;
   const tick = async () => {
+    const total = Object.keys(sessionPlayers).length;
     const q = query(collection(db, "sessions", sessionCode, "answers"), where("questionIndex", "==", sessionData.currentIndex));
     const snap = await getDocs(q);
     const el = document.getElementById("answered-count");
-    if (el) el.textContent = `${snap.size} de ${Object.keys(sessionPlayers).length} responderam`;
+    if (el) el.textContent = `${snap.size} de ${total} responderam`;
+    if (!autoRevealed && total > 0 && snap.size >= total) {
+      autoRevealed = true;
+      revealAnswers();
+    }
   };
   tick();
-  answeredPollInt = setInterval(tick, 2000);
+  answeredPollInt = setInterval(tick, 1500);
 }
 
 async function revealAnswers() {
@@ -883,9 +870,9 @@ function renderReveal() {
       return `
         <div class="bar-row" style="opacity:${isCorrect ? 1 : 0.45}">
           <span class="${OPTION_SHAPES[i % 6]}" style="width:14px;height:14px;background:var(--text-dim);"></span>
-          <div class="bar-track">
+          <div class="bar-track" style="${isCorrect ? "background:rgba(61,220,151,.16); border:2px solid var(--green);" : ""}">
             <div class="bar-fill ${OPTION_COLORS[i % 6]}" style="width:${pct}%;"></div>
-            <div class="bar-label">${escapeHtml(opt)} ${isCorrect ? "✓" : ""}</div>
+            <div class="bar-label">${escapeHtml(opt)} ${isCorrect ? "✓ certa" : ""}</div>
           </div>
           <span style="width:30px; text-align:right; font-size:13px; color:var(--text-dim);">${count}</span>
         </div>`;

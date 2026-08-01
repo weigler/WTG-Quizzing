@@ -55,10 +55,13 @@ pra manter o jogo justo pra quem começou desde o início.
 ### Sala ao vivo
 Ao abrir um quiz, o app gera um **código de 6 dígitos** — e também um
 **QR Code e um link direto**, pra quem for jogar não precisar nem digitar
-nada. Quem organiza controla o ritmo: mostra a pergunta com cronômetro,
-revela a resposta certa com um gráfico de quantos escolheram cada opção,
-mostra o placar, e avança pra próxima. Se o navegador travar ou fechar no
-meio do jogo, dá pra retomar o controle de onde parou.
+nada. Assim que todo mundo responde, a revelação acontece **sozinha**
+(sem precisar clicar em nada) — mas o botão "Revelar respostas agora"
+continua disponível pra avançar antes, se alguém travar. Quem organiza
+controla o resto do ritmo: mostra a pergunta com cronômetro, revela a
+resposta certa com um gráfico de quantos escolheram cada opção, mostra o
+placar, e avança pra próxima. Se o navegador travar ou fechar no meio do
+jogo, dá pra retomar o controle de onde parou.
 
 ### Pontuação
 Igual ao Kahoot: errar vale zero. Acertar vale entre 500 e 1000 pontos,
