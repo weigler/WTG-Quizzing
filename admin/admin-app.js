@@ -78,11 +78,11 @@ document.getElementById("logout-btn").addEventListener("click", () => signOut(au
 const rid = () => Math.random().toString(36).slice(2, 10);
 const genCode = () => String(Math.floor(100000 + Math.random() * 900000));
 
-function emptyQuestion() {
-  return { id: rid(), text: "", type: "single", options: ["", ""], correct: [], timeLimit: 20, imageUrl: null, imageCredit: null };
+function emptyQuestion(timeLimit = 20) {
+  return { id: rid(), text: "", type: "single", options: ["", ""], correct: [], timeLimit, imageUrl: null, imageCredit: null };
 }
 function emptyQuiz() {
-  return { id: null, title: "", theme: "", coverImage: null, coverCredit: null, questions: [] };
+  return { id: null, title: "", theme: "", coverImage: null, coverCredit: null, defaultTimeLimit: 20, questions: [] };
 }
 
 function subscribeQuizzes() {
@@ -197,7 +197,14 @@ function renderEditor() {
     </div>
 
     <input class="input" id="quiz-title" placeholder="Título do quiz" value="${escapeAttr(q.title)}" style="font-family:var(--font-display); font-size:20px; font-weight:700; margin-bottom:10px;" />
-    <input class="input" id="quiz-theme" placeholder="Tema (ex: Escatologia, História, Diversão)" value="${escapeAttr(q.theme)}" style="margin-bottom:20px;" />
+    <input class="input" id="quiz-theme" placeholder="Tema (ex: Escatologia, História, Diversão)" value="${escapeAttr(q.theme)}" style="margin-bottom:10px;" />
+
+    <div style="display:flex; align-items:center; gap:10px; margin-bottom:20px;">
+      <label style="font-size:13px; color:var(--text-dim); white-space:nowrap;">Tempo padrão por pergunta</label>
+      <input class="input" type="number" id="quiz-default-time" min="5" max="60" value="${q.defaultTimeLimit || 20}" style="width:70px;" />
+      <span style="font-size:13px; color:var(--text-dim);">s</span>
+      <button type="button" class="btn-link" id="apply-time-all" style="margin-left:auto;">aplicar a todas as perguntas já criadas</button>
+    </div>
 
     <div id="question-list"></div>
 
@@ -215,11 +222,19 @@ function renderEditor() {
   document.getElementById("back-btn").onclick = () => { view = "list"; render(); };
   document.getElementById("quiz-title").oninput = (e) => (q.title = e.target.value);
   document.getElementById("quiz-theme").oninput = (e) => (q.theme = e.target.value);
+  document.getElementById("quiz-default-time").oninput = (e) => {
+    q.defaultTimeLimit = Math.max(5, Math.min(60, Number(e.target.value) || 20));
+  };
+  document.getElementById("apply-time-all").onclick = () => {
+    q.questions.forEach((item) => (item.timeLimit = q.defaultTimeLimit || 20));
+    if (questionDraft) questionDraft.timeLimit = q.defaultTimeLimit || 20;
+    renderEditor();
+  };
   document.getElementById("cover-pick-btn").onclick = () => openUnsplash("cover");
   document.getElementById("save-quiz-btn").onclick = saveQuiz;
 
   renderQuestionList();
-  if (!questionDraft) questionDraft = emptyQuestion();
+  if (!questionDraft) questionDraft = emptyQuestion(q.defaultTimeLimit || 20);
   renderQuestionForm();
 }
 
@@ -314,7 +329,7 @@ function renderQuestionForm() {
   });
   document.getElementById("q-save").onclick = saveQuestionDraft;
   document.getElementById("q-cancel")?.addEventListener("click", () => {
-    questionDraft = emptyQuestion(); questionEditingIdx = null; renderQuestionForm(); document.getElementById("draft-heading").textContent = "Nova pergunta";
+    questionDraft = emptyQuestion(quizDraft.defaultTimeLimit || 20); questionEditingIdx = null; renderQuestionForm(); document.getElementById("draft-heading").textContent = "Nova pergunta";
   });
 }
 
@@ -386,7 +401,7 @@ function saveQuestionDraft() {
   errEl.textContent = "";
   if (questionEditingIdx === null) quizDraft.questions.push(clean);
   else quizDraft.questions[questionEditingIdx] = clean;
-  questionDraft = emptyQuestion();
+  questionDraft = emptyQuestion(quizDraft.defaultTimeLimit || 20);
   questionEditingIdx = null;
   renderEditor();
 }
@@ -397,7 +412,7 @@ async function saveQuiz() {
   if (!q.title.trim()) return (errEl.textContent = "Dê um título ao quiz.");
   if (q.questions.length === 0) return (errEl.textContent = "Adicione ao menos uma pergunta.");
   errEl.textContent = "";
-  const payload = { title: q.title.trim(), theme: q.theme.trim(), coverImage: q.coverImage, coverCredit: q.coverCredit, questions: q.questions, updatedAt: serverTimestamp() };
+  const payload = { title: q.title.trim(), theme: q.theme.trim(), coverImage: q.coverImage, coverCredit: q.coverCredit, defaultTimeLimit: q.defaultTimeLimit || 20, questions: q.questions, updatedAt: serverTimestamp() };
   if (q.id) {
     await updateDoc(doc(db, "quizzes", q.id), payload);
   } else {
@@ -428,10 +443,28 @@ document.getElementById("unsplash-query").addEventListener("input", (e) => {
 async function searchUnsplash(term) {
   const resultsEl = document.getElementById("unsplash-results");
   resultsEl.innerHTML = `<div class="spinner"></div>`;
+
+  if (!UNSPLASH_ACCESS_KEY || UNSPLASH_ACCESS_KEY.includes("SUA_ACCESS_KEY")) {
+    resultsEl.innerHTML = `<div class="error-text" style="grid-column:1/-1;">Falta configurar a chave do Unsplash em <code>shared/unsplash-config.js</code> (veja as instruções nos comentários do arquivo).</div>`;
+    return;
+  }
+
   try {
     const res = await fetch(`https://api.unsplash.com/search/photos?query=${encodeURIComponent(term)}&per_page=12`, {
       headers: { Authorization: `Client-ID ${UNSPLASH_ACCESS_KEY}` },
     });
+    if (res.status === 401) {
+      resultsEl.innerHTML = `<div class="error-text" style="grid-column:1/-1;">Chave do Unsplash inválida. Confira se copiou o <b>Access Key</b> (não o Secret Key) pra <code>shared/unsplash-config.js</code>.</div>`;
+      return;
+    }
+    if (res.status === 403) {
+      resultsEl.innerHTML = `<div class="error-text" style="grid-column:1/-1;">Limite de buscas do Unsplash atingido por agora (50/hora no plano grátis). Tenta de novo daqui a pouco.</div>`;
+      return;
+    }
+    if (!res.ok) {
+      resultsEl.innerHTML = `<div class="error-text" style="grid-column:1/-1;">O Unsplash respondeu com erro (${res.status}). Tenta de novo.</div>`;
+      return;
+    }
     const data = await res.json();
     if (!data.results || data.results.length === 0) {
       resultsEl.innerHTML = `<div style="color:var(--text-dim); grid-column: 1/-1;">Nenhuma imagem encontrada.</div>`;
@@ -442,7 +475,7 @@ async function searchUnsplash(term) {
       img.onclick = () => selectUnsplashPhoto(data.results[Number(img.dataset.idx)]);
     });
   } catch (err) {
-    resultsEl.innerHTML = `<div class="error-text">Não consegui buscar no Unsplash. Confira a chave em unsplash-config.js.</div>`;
+    resultsEl.innerHTML = `<div class="error-text" style="grid-column:1/-1;">Não consegui buscar no Unsplash (falha de rede/CORS). Confira sua conexão e se a chave em <code>unsplash-config.js</code> está certa.</div>`;
   }
 }
 
@@ -490,11 +523,21 @@ function renderControl() {
 
 function renderLobby() {
   const players = Object.values(sessionPlayers);
+  const joinUrl = new URL(`../jogo/index.html?code=${sessionCode}`, window.location.href).href;
   root.innerHTML = `
     <button class="btn-link" id="control-back">← voltar aos quizzes</button>
     <div class="eyebrow" style="text-align:center; margin-top:10px;">sala aberta · ${escapeHtml(sessionData.title)}</div>
     <div class="code-big">${sessionCode}</div>
-    <p style="color:var(--text-dim); text-align:center;">Peça pra galera entrar com esse código, pelo celular.</p>
+    <p style="color:var(--text-dim); text-align:center;">Peça pra galera entrar com esse código, pelo celular — ou escanear o QR Code abaixo.</p>
+
+    <div class="qr-box">
+      <div id="qr-canvas"></div>
+    </div>
+    <div class="join-link-row">
+      <input class="input" id="join-url" readonly value="${joinUrl}" />
+      <button class="btn btn-ghost" id="copy-link-btn">copiar link</button>
+    </div>
+
     <div class="card" style="margin-top:20px;">
       <div style="font-weight:700; margin-bottom:10px;">Jogadores (${players.length})</div>
       <div class="player-pill-list">
@@ -505,6 +548,27 @@ function renderLobby() {
   `;
   document.getElementById("control-back").onclick = () => { view = "list"; unsubSession(); unsubPlayers(); render(); };
   document.getElementById("begin-btn").onclick = beginGame;
+
+  document.getElementById("qr-canvas").innerHTML = "";
+  if (window.QRCode) {
+    new QRCode(document.getElementById("qr-canvas"), {
+      text: joinUrl, width: 180, height: 180,
+      colorDark: "#0B0E1A", colorLight: "#ffffff",
+    });
+  }
+  document.getElementById("copy-link-btn").onclick = async () => {
+    const input = document.getElementById("join-url");
+    input.select();
+    try {
+      await navigator.clipboard.writeText(joinUrl);
+    } catch {
+      document.execCommand("copy");
+    }
+    const btn = document.getElementById("copy-link-btn");
+    const original = btn.textContent;
+    btn.textContent = "copiado!";
+    setTimeout(() => (btn.textContent = original), 1500);
+  };
 }
 
 async function beginGame() {

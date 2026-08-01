@@ -122,6 +122,7 @@ jogo/
   jogo-icon-192.png / jogo-icon-512.png / jogo-favicon.png / jogo-apple-touch-icon.png
 firestore.rules          regras de funcionamento do banco
 FUNCIONALIDADES.md       o que o app faz, sem passos de instalação
+index.html               página inicial (link pro jogo e pro admin)
 ```
 
 Só o `index.html` tem o mesmo nome nas duas pastas — é proposital, é o

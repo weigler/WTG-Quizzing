@@ -32,16 +32,50 @@ let lastIndexAnswered = -1;
 let unsubSession = null;
 let unsubScore = null;
 
-/* tenta retomar sessão salva no navegador (se a pessoa recarregar a página) */
-const saved = JSON.parse(localStorage.getItem("quiz-player") || "null");
-if (saved?.code && saved?.playerId) {
-  code = saved.code; playerId = saved.playerId; playerName = saved.name;
-  if (saved.avatar) avatarDraft = saved.avatar;
-  subscribeSession();
-  view = "wait";
+/* tenta retomar sessão salva no navegador (se a pessoa recarregar a página) —
+   mas só se aquela sessão ainda existir e não tiver acabado; caso
+   contrário, limpa e mostra a tela normal de entrada com código */
+function viewForStatus(status) {
+  if (status === "question") return "question";
+  if (status === "reveal") return "reveal";
+  if (status === "leaderboard") return "leaderboard";
+  if (status === "ended") return "end";
+  return "wait";
 }
 
-render();
+async function boot() {
+  const saved = JSON.parse(localStorage.getItem("quiz-player") || "null");
+  const params = new URLSearchParams(window.location.search);
+  const codeFromUrl = params.get("code");
+
+  if (saved?.code && saved?.playerId) {
+    try {
+      const snap = await getDoc(doc(db, "sessions", saved.code));
+      if (snap.exists() && snap.data().status !== "ended") {
+        code = saved.code; playerId = saved.playerId; playerName = saved.name;
+        if (saved.avatar) avatarDraft = saved.avatar;
+        sessionData = snap.data();
+        lastIndexAnswered = sessionData.status === "lobby" ? -1 : sessionData.currentIndex;
+        if (sessionData.status === "question") {
+          const ansSnap = await getDoc(doc(db, "sessions", code, "answers", `${sessionData.currentIndex}_${playerId}`));
+          hasAnswered = ansSnap.exists();
+        }
+        view = viewForStatus(sessionData.status);
+        subscribeSession();
+        render();
+        return;
+      }
+    } catch { /* segue pro fluxo normal abaixo */ }
+    localStorage.removeItem("quiz-player");
+  }
+
+  if (codeFromUrl && /^\d{6}$/.test(codeFromUrl)) {
+    joinCodeValue = codeFromUrl;
+  }
+  render();
+}
+
+boot();
 
 /* ---------------- helpers ---------------- */
 function escapeHtml(str) {
@@ -158,13 +192,14 @@ function renderJoin() {
   root.innerHTML = `
     <div class="eyebrow">quiz ao vivo</div>
     <h1 style="font-size:26px; margin-top:6px;">Digite o código</h1>
-    <input class="input" id="join-code" placeholder="000000" maxlength="6" style="text-align:center; font-size:28px; letter-spacing:6px; font-family:var(--font-display); margin-top:16px;" />
+    <input class="input" id="join-code" placeholder="000000" maxlength="6" value="${joinCodeValue || ""}" style="text-align:center; font-size:28px; letter-spacing:6px; font-family:var(--font-display); margin-top:16px;" />
     <input class="input" id="join-name" placeholder="Seu nome" maxlength="20" style="margin-top:12px;" />
     <div id="join-error" class="error-text"></div>
     <button class="btn btn-primary btn-block" id="join-btn" style="margin-top:18px;">Entrar →</button>
   `;
   const codeInput = document.getElementById("join-code");
   codeInput.oninput = () => (codeInput.value = codeInput.value.replace(/\D/g, "").slice(0, 6));
+  if (joinCodeValue) document.getElementById("join-name").focus();
   document.getElementById("join-btn").onclick = () => goToAvatarStep(codeInput.value, document.getElementById("join-name").value);
 }
 

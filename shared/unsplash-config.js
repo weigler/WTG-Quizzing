@@ -8,4 +8,4 @@
 //
 // O plano gratuito (Demo) permite 50 buscas por hora, o que é de sobra pra
 // montar as perguntas de um quiz.
-export const UNSPLASH_ACCESS_KEY = "SUA_ACCESS_KEY_AQUI";
+export const UNSPLASH_ACCESS_KEY = "Lseivsz9zc2MeiZEtmyCqpc_Zx8wj7Tpp6J8U2V0NzY";

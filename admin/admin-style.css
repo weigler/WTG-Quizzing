@@ -102,3 +102,15 @@
   font-family: var(--font-display); font-size: 56px; font-weight: 700;
   letter-spacing: 8px; color: var(--gold); text-align: center; margin-top: 8px;
 }
+
+.qr-box {
+  display: flex; justify-content: center; margin-top: 18px;
+}
+.qr-box #qr-canvas {
+  background: #fff; padding: 14px; border-radius: 14px; line-height: 0;
+}
+.join-link-row {
+  display: flex; gap: 8px; margin-top: 12px;
+}
+.join-link-row .input { font-size: 12px; color: var(--text-dim); }
+.join-link-row .btn { width: auto; white-space: nowrap; padding: 10px 16px; font-size: 13px; }
