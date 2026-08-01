@@ -28,10 +28,6 @@ Não existe cadastro público — só você cria as contas, em Firebase Console
 Cada conta só vê e controla os próprios quizzes e sessões; uma pessoa não
 enxerga nem mexe no que é de outra.
 
-Se aparecer, no Console do navegador (F12), um aviso pedindo pra criar um
-"índice composto" ao abrir a aba Sessões, é só clicar no link que o
-próprio aviso mostra (já vem preenchido) e aguardar alguns segundos.
-
 ### 3. Unsplash (imagens das perguntas)
 1. Crie uma conta em [unsplash.com/developers](https://unsplash.com/developers)
 2. Crie uma aplicação ("New Application")

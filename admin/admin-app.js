@@ -4,7 +4,7 @@ import {
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-auth.js";
 import {
   getFirestore, collection, doc, addDoc, setDoc, updateDoc, deleteDoc,
-  onSnapshot, getDoc, getDocs, query, where, orderBy, serverTimestamp,
+  onSnapshot, getDoc, getDocs, query, where, serverTimestamp,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 import { firebaseConfig } from "../shared/firebase-config.js";
@@ -94,10 +94,18 @@ function emptyQuiz() {
 
 function subscribeQuizzes() {
   unsubQuizzes && unsubQuizzes();
-  unsubQuizzes = onSnapshot(query(collection(db, "quizzes"), where("ownerId", "==", currentUser.uid)), (snap) => {
-    quizzes = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
-    if (view === "list") render();
-  });
+  unsubQuizzes = onSnapshot(
+    query(collection(db, "quizzes"), where("ownerId", "==", currentUser.uid)),
+    (snap) => {
+      quizzes = snap.docs.map((d) => ({ id: d.id, ...d.data() }));
+      if (view === "list") render();
+    },
+    (err) => {
+      console.error("Erro ao carregar quizzes:", err);
+      quizzes = [];
+      if (view === "list") render();
+    }
+  );
 }
 
 /* ---------------- render raiz ---------------- */
@@ -959,15 +967,38 @@ function renderEnded() {
 function subscribeSessionsList() {
   unsubSessionsList && unsubSessionsList();
   unsubSessionsList = onSnapshot(
-    query(collection(db, "sessions"), where("ownerId", "==", currentUser.uid), orderBy("createdAt", "desc")),
+    query(collection(db, "sessions"), where("ownerId", "==", currentUser.uid)),
     (snap) => {
-      sessionsList = snap.docs.map((d) => ({ code: d.id, ...d.data() }));
+      sessionsList = snap.docs
+        .map((d) => ({ code: d.id, ...d.data() }))
+        .sort((a, b) => (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0));
       if (view === "sessions") render();
+    },
+    (err) => {
+      console.error("Erro ao carregar sessões:", err);
+      sessionsList = [];
+      if (view === "sessions") renderSessionsError(err);
     }
   );
 }
 
 const STATUS_LABEL = { lobby: "aguardando", question: "em andamento", reveal: "em andamento", leaderboard: "em andamento", ended: "encerrada" };
+
+function renderSessionsError(err) {
+  root.innerHTML = `
+    ${navTabsHtml("sessions")}
+    <h1 style="font-size:24px; margin-top:16px;">Sessões</h1>
+    <div class="card" style="margin-top:14px; border-color:var(--coral);">
+      <div style="color:var(--coral); font-weight:700; margin-bottom:6px;">Não consegui carregar as sessões</div>
+      <div style="font-size:13px; color:var(--text-dim);">
+        Confira se as regras do Firestore já foram publicadas certinho, e olha o Console do navegador (F12) —
+        se o Firestore estiver pedindo pra criar um índice, tem um link pronto lá.
+      </div>
+      <div style="font-size:11px; color:var(--text-dim); margin-top:8px; font-family:monospace;">${escapeHtml(err?.message || String(err))}</div>
+    </div>
+  `;
+  bindNavTabs();
+}
 
 function renderSessions() {
   root.innerHTML = `
