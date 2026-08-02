@@ -28,26 +28,28 @@ export function comboBonus(streak) {
 }
 
 // Pontuação de UMA pergunta ao vivo, dado o combo até a pergunta anterior.
-// Usado pelo admin ao revelar cada pergunta, sequencialmente.
-export function nextQuestionScore({ prevStreak = 0, correct, timeMs, timeLimit, multiplier = 1, precisionMode = false }) {
+// Usado pelo admin ao revelar cada pergunta, sequencialmente. O bônus de
+// combo só entra se o quiz tiver o Modo Combo ativado (desligado por
+// padrão, igual o Modo de Precisão).
+export function nextQuestionScore({ prevStreak = 0, correct, timeMs, timeLimit, multiplier = 1, precisionMode = false, comboMode = false }) {
   if (!correct) return { points: 0, newStreak: 0, combo: 0, bonus: 0 };
   const newStreak = prevStreak + 1;
   const base = kahootPoints(timeMs, timeLimit, multiplier, precisionMode);
-  const bonus = comboBonus(newStreak);
-  return { points: base + bonus, newStreak, combo: newStreak >= 2 ? newStreak : 0, bonus };
+  const bonus = comboMode ? comboBonus(newStreak) : 0;
+  return { points: base + bonus, newStreak, combo: comboMode && newStreak >= 2 ? newStreak : 0, bonus };
 }
 
 // Recalcula a pontuação de uma sequência inteira de perguntas (usado nos
 // relatórios e no PDF), reconstruindo o combo do zero — dá o mesmo
 // resultado de quando foi jogado ao vivo, pergunta por pergunta.
-export function scoreQuestionSequence(items, precisionMode = false) {
+export function scoreQuestionSequence(items, precisionMode = false, comboMode = false) {
   let streak = 0;
   return items.map((it) => {
     if (!it.correct) { streak = 0; return { points: 0, combo: 0, bonus: 0 }; }
     streak += 1;
     const base = kahootPoints(it.timeMs, it.timeLimit, it.multiplier, precisionMode);
-    const bonus = comboBonus(streak);
-    return { points: base + bonus, combo: streak >= 2 ? streak : 0, bonus };
+    const bonus = comboMode ? comboBonus(streak) : 0;
+    return { points: base + bonus, combo: comboMode && streak >= 2 ? streak : 0, bonus };
   });
 }
 

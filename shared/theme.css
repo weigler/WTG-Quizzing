@@ -131,6 +131,11 @@ h1, h2, h3 { font-family: var(--font-display); margin: 0; }
   border: none; border-radius: var(--radius);
   padding: 18px 16px; color: #12101a; font-weight: 700; font-size: 16px;
   text-align: left; width: 100%; cursor: pointer;
+  min-height: 76px; box-sizing: border-box;
+}
+.option-btn > span:last-child {
+  display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical;
+  overflow: hidden; line-height: 1.25;
 }
 .option-btn[data-selected="true"] { outline: 3px solid #fff; }
 .option-btn:disabled { cursor: default; }

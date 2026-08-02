@@ -112,23 +112,38 @@ function subscribeSession() {
   });
 }
 
+// Antes, essa função só avançava a tela se o jogador estivesse vindo
+// exatamente da tela anterior esperada (tipo uma corrente). Em celulares
+// que perdem um "degrau" — app em segundo plano, rede instável, tela
+// bloqueada — o Firestore entrega só o estado mais recente, pulando os
+// intermediários, e a corrente quebrava: o jogador ficava preso na tela
+// velha pra sempre, mesmo o jogo já tendo avançado lá na frente.
+//
+// Agora a tela é recalculada direto a partir do status atual da sessão,
+// sem depender de onde o jogador estava antes — se autocorrige sozinha
+// mesmo perdendo atualizações no meio do caminho.
 function reactToStatus() {
   const s = sessionData;
   if (!s) return;
-  if (s.status === "question" && s.currentIndex !== lastIndexAnswered && (view === "wait" || view === "leaderboard" || view === "reveal")) {
-    lastIndexAnswered = -2; // marca que ainda não respondeu essa
-    mySelected = [];
-    hasAnswered = false;
-    view = "question";
-  } else if (s.status === "reveal" && (view === "question" || view === "answered")) {
-    view = "reveal";
-  } else if (s.status === "leaderboard" && (view === "reveal" || view === "question" || view === "answered")) {
-    view = "leaderboard";
-  } else if (s.status === "ended") {
+
+  if (s.status === "ended") {
     view = "end";
     unsubSession && unsubSession();
     unsubScore && unsubScore();
+    return;
   }
+  if (s.status === "question") {
+    if (s.currentIndex !== lastIndexAnswered) {
+      lastIndexAnswered = -2; // marca que ainda não respondeu essa
+      mySelected = [];
+      hasAnswered = false;
+    }
+    view = "question";
+    return;
+  }
+  if (s.status === "reveal") { view = "reveal"; return; }
+  if (s.status === "leaderboard") { view = "leaderboard"; return; }
+  if (s.status === "lobby") view = "wait";
 }
 
 /* ---------------- ações ---------------- */
@@ -405,14 +420,19 @@ function renderWait() {
     <div style="margin:10px 0;">${avatarSVG(avatarDraft, 96)}</div>
     <h1 style="font-size:24px; margin-top:6px;">Aguardando o início...</h1>
     <p style="color:var(--text-dim); margin-top:8px;">Fica de olho na tela — o jogo começa a qualquer momento.</p>
-    <button class="btn-link" id="leave-btn" style="margin-top:26px;">sair da sala</button>
+    <div style="display:flex; gap:16px; margin-top:26px;">
+      <button class="btn-link" id="refresh-btn">🔄 atualizar</button>
+      <button class="btn-link" id="leave-btn">sair da sala</button>
+    </div>
   `;
   document.getElementById("leave-btn").onclick = leaveGame;
+  document.getElementById("refresh-btn").onclick = () => window.location.reload();
 }
 
 function renderQuestion() {
   const s = sessionData;
   const q = s.questions[s.currentIndex];
+  const anyImages = s.questions.some((qq) => qq.imageUrl);
   root.className = "container left";
 
   if (hasAnswered) {
@@ -421,9 +441,13 @@ function renderQuestion() {
       <div class="eyebrow">${noAnswer ? "tempo esgotado ⏱️" : "enviado ✓"}</div>
       <h1 style="font-size:24px; margin-top:6px;">${noAnswer ? "Não deu tempo..." : "Resposta registrada!"}</h1>
       <p style="color:var(--text-dim); margin-top:8px;">Aguardando o resto da turma...</p>
-      <button class="btn-link" id="leave-btn" style="margin-top:20px;">sair da sala</button>
+      <div style="display:flex; gap:16px; margin-top:20px;">
+        <button class="btn-link" id="refresh-btn">🔄 atualizar</button>
+        <button class="btn-link" id="leave-btn">sair da sala</button>
+      </div>
     `;
     document.getElementById("leave-btn").onclick = leaveGame;
+    document.getElementById("refresh-btn").onclick = () => window.location.reload();
     return;
   }
 
@@ -431,7 +455,7 @@ function renderQuestion() {
     <div class="eyebrow" style="text-align:center;">pergunta ${s.currentIndex + 1} de ${s.questions.length}</div>
     <div class="timer-ring" id="timer-ring"><span id="timer-num">--</span></div>
     ${q.pointsMultiplier > 1 ? `<div style="color:var(--gold); font-size:12px; font-weight:700; margin-top:8px; text-align:center;">🎁 pergunta bônus · vale ${q.pointsMultiplier}x</div>` : ""}
-    ${q.imageUrl ? `<img class="q-image" src="${q.imageUrl}" style="margin-top:12px;" />` : ""}
+    ${anyImages ? `<div class="q-image-slot" style="margin-top:12px; ${q.imageUrl ? `background-image:url('${q.imageUrl}');` : ""}"></div>` : ""}
     <h2 style="font-size:19px; margin:10px 0 14px;">${escapeHtml(q.text)}</h2>
     <div style="display:flex; flex-direction:column; gap:10px;" id="options"></div>
     ${q.type === "multiple" ? `<button class="btn btn-primary btn-block" id="confirm-btn" style="margin-top:16px;" disabled>Confirmar resposta</button>` : ""}
@@ -488,7 +512,7 @@ function renderReveal() {
       <div class="big-emoji">${correct ? "✅" : noAnswer ? "⏱️" : "❌"}</div>
       <h1 style="font-size:22px; margin-top:8px;">${correct ? "Certinho!" : noAnswer ? "Tempo esgotado" : "Não foi dessa vez"}</h1>
       ${myScore ? `<div style="color:var(--gold); font-weight:700; margin-top:4px;">+${myScore.lastPoints} pontos</div>` : ""}
-      ${myScore?.lastCombo >= 2 ? `<div style="color:var(--coral); font-weight:700; font-size:13px; margin-top:2px;">🔥 combo x${myScore.lastCombo}!</div>` : ""}
+      ${myScore?.lastCombo >= 2 ? `<div style="color:var(--coral); font-weight:700; font-size:13px; margin-top:2px;">🔥 combo x${myScore.lastCombo}! +${myScore.lastBonus} de bônus</div>` : ""}
       <div style="color:var(--text-dim); margin:6px 0 18px;">Total: <b style="color:var(--text);">${myScore?.total ?? 0}</b> pontos</div>
     </div>
     <div style="display:flex; flex-direction:column; gap:10px;">
@@ -506,9 +530,13 @@ function renderReveal() {
         `;
       }).join("")}
     </div>
-    <button class="btn-link" id="leave-btn" style="margin-top:16px; align-self:center;">sair da sala</button>
+    <div style="display:flex; gap:16px; margin-top:16px; align-self:center;">
+      <button class="btn-link" id="refresh-btn">🔄 atualizar</button>
+      <button class="btn-link" id="leave-btn">sair da sala</button>
+    </div>
   `;
   document.getElementById("leave-btn").onclick = leaveGame;
+  document.getElementById("refresh-btn").onclick = () => window.location.reload();
 }
 
 function renderLeaderboard() {
@@ -529,9 +557,13 @@ function renderLeaderboard() {
         </div>
       `).join("")}
     </div>
-    <button class="btn-link" id="leave-btn" style="margin-top:16px; align-self:center;">sair da sala</button>
+    <div style="display:flex; gap:16px; margin-top:16px; align-self:center;">
+      <button class="btn-link" id="refresh-btn">🔄 atualizar</button>
+      <button class="btn-link" id="leave-btn">sair da sala</button>
+    </div>
   `;
   document.getElementById("leave-btn").onclick = leaveGame;
+  document.getElementById("refresh-btn").onclick = () => window.location.reload();
 }
 
 function renderEnd() {
@@ -571,7 +603,7 @@ async function downloadMyReportPdf() {
       const correct = sel === cor && sel !== "";
       return { correct, timeMs: ans.timeMs, timeLimit: q.timeLimit, multiplier: q.pointsMultiplier || 1, ans };
     });
-    const scored = scoreQuestionSequence(items, !!s.precisionMode);
+    const scored = scoreQuestionSequence(items, !!s.precisionMode, !!s.comboMode);
 
     const rows = s.questions.map((q, idx) => {
       const item = items[idx];
@@ -582,7 +614,7 @@ async function downloadMyReportPdf() {
         (item.ans.selected || []).map((i) => q.options[i]).join(", "),
         `${((item.timeMs || 0) / 1000).toFixed(1)}s`,
         item.correct ? "sim" : "não",
-        sc.combo >= 2 ? `x${sc.combo}` : "—",
+        sc.combo >= 2 ? `x${sc.combo} (+${sc.bonus})` : "—",
         item.correct ? `+${sc.points}` : "0",
       ];
     });

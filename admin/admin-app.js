@@ -93,11 +93,11 @@ document.getElementById("logout-btn").addEventListener("click", () => signOut(au
 const rid = () => Math.random().toString(36).slice(2, 10);
 const genCode = () => String(Math.floor(100000 + Math.random() * 900000));
 
-function emptyQuestion(timeLimit = 20) {
-  return { id: rid(), text: "", type: "single", options: ["", ""], correct: [], timeLimit, pointsMultiplier: 1, imageUrl: null, imageCredit: null };
+function emptyQuestion(timeLimit = 20, image = null) {
+  return { id: rid(), text: "", type: "single", options: ["", ""], correct: [], timeLimit, pointsMultiplier: 1, imageUrl: image?.url || null, imageCredit: image?.credit || null };
 }
 function emptyQuiz() {
-  return { id: null, title: "", theme: "", coverImage: null, coverCredit: null, defaultTimeLimit: 20, musicUrl: null, precisionMode: false, questions: [] };
+  return { id: null, title: "", theme: "", coverImage: null, coverCredit: null, defaultTimeLimit: 20, musicUrl: null, precisionMode: false, comboMode: false, questions: [] };
 }
 
 function subscribeQuizzes() {
@@ -215,6 +215,7 @@ async function duplicateQuiz(q) {
     defaultTimeLimit: copy.defaultTimeLimit || 20,
     musicUrl: copy.musicUrl || null,
     precisionMode: !!copy.precisionMode,
+    comboMode: !!copy.comboMode,
     questions: copy.questions,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
@@ -241,6 +242,7 @@ async function launchSession(quiz) {
     questions: quiz.questions,
     musicUrl: quiz.musicUrl || null,
     precisionMode: !!quiz.precisionMode,
+    comboMode: !!quiz.comboMode,
     currentIndex: -1,
     questionStartedAt: null,
     createdAt: serverTimestamp(),
@@ -292,9 +294,14 @@ function renderEditor() {
       </div>
     </div>
 
-    <label style="display:flex; align-items:center; gap:8px; margin-bottom:20px; font-size:13px; color:var(--text-dim); cursor:pointer;">
+    <label style="display:flex; align-items:center; gap:8px; margin-bottom:10px; font-size:13px; color:var(--text-dim); cursor:pointer;">
       <input type="checkbox" id="quiz-precision" ${q.precisionMode ? "checked" : ""} />
       <span><b style="color:var(--text);">Modo de Precisão</b> — pontuação só pelo acerto (1000 pontos fixos), sem contar velocidade</span>
+    </label>
+
+    <label style="display:flex; align-items:center; gap:8px; margin-bottom:20px; font-size:13px; color:var(--text-dim); cursor:pointer;">
+      <input type="checkbox" id="quiz-combo" ${q.comboMode ? "checked" : ""} />
+      <span><b style="color:var(--text);">Modo Combo</b> — acertar perguntas seguidas acumula um bônus extra de pontos (desligado por padrão)</span>
     </label>
 
     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
@@ -344,9 +351,10 @@ function renderEditor() {
   };
   document.getElementById("music-test-btn").onclick = () => testMusic(document.getElementById("quiz-music").value.trim());
   document.getElementById("quiz-precision").onchange = (e) => (q.precisionMode = e.target.checked);
+  document.getElementById("quiz-combo").onchange = (e) => (q.comboMode = e.target.checked);
 
   renderQuestionList();
-  if (!questionDraft) questionDraft = emptyQuestion(q.defaultTimeLimit || 20);
+  if (!questionDraft) questionDraft = emptyQuestion(q.defaultTimeLimit || 20, quizDraft.defaultQuestionImage);
   renderQuestionForm();
 }
 
@@ -428,9 +436,11 @@ function renderQuestionForm() {
       <div>
         <button class="btn btn-ghost" id="q-img-pick" type="button">${d.imageUrl ? "Trocar imagem" : "Adicionar imagem (opcional)"}</button>
         ${d.imageUrl ? `<button class="btn-link" id="q-img-remove" style="color:var(--coral);">remover</button>` : ""}
+        ${d.imageUrl && quizDraft.questions.length > 0 ? `<button type="button" class="btn-link" id="q-img-apply-all">usar em todas as perguntas</button>` : ""}
         ${d.imageCredit ? `<div class="image-credit">Foto: <a href="${d.imageCredit.link}" target="_blank">${escapeHtml(d.imageCredit.name)}</a> / Unsplash</div>` : ""}
       </div>
     </div>
+    <div id="q-img-apply-result" style="font-size:11px; color:var(--green); margin:-6px 0 10px;"></div>
 
     <textarea class="input" id="q-text" placeholder="Escreva a pergunta..." maxlength="150" style="min-height:60px; margin-bottom:4px;">${escapeHtml(d.text)}</textarea>
     <div id="q-text-count" style="text-align:right; font-size:11px; color:var(--text-dim); margin-bottom:8px;">${d.text.length}/150</div>
@@ -470,6 +480,12 @@ function renderQuestionForm() {
 
   document.getElementById("q-img-pick").onclick = () => openUnsplash("question");
   document.getElementById("q-img-remove")?.addEventListener("click", () => { d.imageUrl = null; d.imageCredit = null; renderQuestionForm(); });
+  document.getElementById("q-img-apply-all")?.addEventListener("click", () => {
+    quizDraft.questions.forEach((item) => { item.imageUrl = d.imageUrl; item.imageCredit = d.imageCredit; });
+    quizDraft.defaultQuestionImage = { url: d.imageUrl, credit: d.imageCredit };
+    renderQuestionList();
+    document.getElementById("q-img-apply-result").textContent = `✓ imagem aplicada às ${quizDraft.questions.length} pergunta(s) já cadastradas — e as próximas já nascem com ela também.`;
+  });
   document.getElementById("q-text").oninput = (e) => {
     d.text = e.target.value;
     document.getElementById("q-text-count").textContent = `${d.text.length}/150`;
@@ -488,7 +504,7 @@ function renderQuestionForm() {
   });
   document.getElementById("q-save").onclick = saveQuestionDraft;
   document.getElementById("q-cancel")?.addEventListener("click", () => {
-    questionDraft = emptyQuestion(quizDraft.defaultTimeLimit || 20);
+    questionDraft = emptyQuestion(quizDraft.defaultTimeLimit || 20, quizDraft.defaultQuestionImage);
     questionEditingIdx = null;
     renderEditor();
   });
@@ -579,7 +595,7 @@ function saveQuestionDraft() {
   errEl.textContent = "";
   if (questionEditingIdx === null) quizDraft.questions.push(clean);
   else quizDraft.questions[questionEditingIdx] = clean;
-  questionDraft = emptyQuestion(quizDraft.defaultTimeLimit || 20);
+  questionDraft = emptyQuestion(quizDraft.defaultTimeLimit || 20, quizDraft.defaultQuestionImage);
   questionEditingIdx = null;
   renderEditor();
 }
@@ -590,7 +606,7 @@ async function saveQuiz() {
   if (!q.title.trim()) return (errEl.textContent = "Dê um título ao quiz.");
   if (q.questions.length === 0) return (errEl.textContent = "Adicione ao menos uma pergunta.");
   errEl.textContent = "";
-  const payload = { title: q.title.trim(), theme: q.theme.trim(), coverImage: q.coverImage, coverCredit: q.coverCredit, defaultTimeLimit: q.defaultTimeLimit || 20, musicUrl: q.musicUrl || null, precisionMode: !!q.precisionMode, questions: q.questions, updatedAt: serverTimestamp() };
+  const payload = { title: q.title.trim(), theme: q.theme.trim(), coverImage: q.coverImage, coverCredit: q.coverCredit, defaultTimeLimit: q.defaultTimeLimit || 20, musicUrl: q.musicUrl || null, precisionMode: !!q.precisionMode, comboMode: !!q.comboMode, questions: q.questions, updatedAt: serverTimestamp() };
   if (q.id) {
     await updateDoc(doc(db, "quizzes", q.id), payload);
   } else {
@@ -918,7 +934,7 @@ function renderQuestionLive() {
   root.innerHTML = `
     <div class="eyebrow" style="text-align:center;">pergunta ${s.currentIndex + 1} de ${s.questions.length}${q.pointsMultiplier > 1 ? ` · <span style="color:var(--gold);">🎁 bônus ${q.pointsMultiplier}x</span>` : ""}</div>
     <div class="timer-ring"><span id="timer-num">--</span></div>
-    ${q.imageUrl ? `<img src="${q.imageUrl}" style="width:100%; max-height:220px; object-fit:cover; border-radius:14px; margin-top:14px;" />` : ""}
+    ${s.questions.some((qq) => qq.imageUrl) ? `<div class="q-image-slot" style="margin-top:14px; ${q.imageUrl ? `background-image:url('${q.imageUrl}');` : ""}"></div>` : ""}
     <h2 style="text-align:center; font-size:22px; margin:14px 0;">${escapeHtml(q.text)}</h2>
     <div class="grid-2">
       ${q.options.map((opt, i) => `
@@ -992,6 +1008,7 @@ async function revealAnswers() {
       timeLimit: q.timeLimit,
       multiplier: q.pointsMultiplier || 1,
       precisionMode: !!s.precisionMode,
+      comboMode: !!s.comboMode,
     });
     writes.push(setDoc(doc(db, "sessions", sessionCode, "scores", pid), {
       total: prevTotal + pts, lastPoints: pts, lastCorrect: correct, streak: newStreak, lastCombo: combo, lastBonus: bonus,
@@ -1280,7 +1297,7 @@ async function openReport(code) {
   });
   const perPlayerScored = {};
   playerIds.forEach((pid) => {
-    perPlayerScored[pid] = scoreQuestionSequence(perPlayerAnswers[pid], !!sess.precisionMode);
+    perPlayerScored[pid] = scoreQuestionSequence(perPlayerAnswers[pid], !!sess.precisionMode, !!sess.comboMode);
   });
 
   const perQuestion = sess.questions.map((q, idx) => {
@@ -1298,6 +1315,7 @@ async function openReport(code) {
         correct: item.correct,
         points: scored.points,
         combo: scored.combo,
+        bonus: scored.bonus,
       };
     });
     return { text: q.text, correctLabels: q.correct.map((i) => q.options[i]).join(", "), rows };
@@ -1351,7 +1369,7 @@ function renderReport() {
               <div style="font-weight:600; font-size:13px;">${escapeHtml(row.name)}</div>
               <div style="font-size:12px; color:var(--text-dim);">${escapeHtml(row.selectedLabels)}${row.timeMs != null ? ` · ${(row.timeMs / 1000).toFixed(1)}s` : ""}</div>
             </span>
-            <span style="color:${row.correct ? "var(--green)" : "var(--coral)"}; font-weight:700; font-size:13px;">${row.correct ? `+${row.points}` : "0"}${row.combo >= 2 ? ` <span style="color:var(--gold); font-size:11px;">🔥x${row.combo}</span>` : ""}</span>
+            <span style="color:${row.correct ? "var(--green)" : "var(--coral)"}; font-weight:700; font-size:13px;">${row.correct ? `+${row.points}` : "0"}${row.combo >= 2 ? ` <span style="color:var(--gold); font-size:11px;">🔥x${row.combo} (+${row.bonus} bônus)</span>` : ""}</span>
           </div>
         `).join("")}
       </div>
@@ -1371,7 +1389,7 @@ function renderReport() {
 }
 
 function downloadReportCsv(r) {
-  const lines = [["Pergunta", "Jogador", "Resposta", "Tempo (s)", "Certo?", "Combo", "Pontos"].join(";")];
+  const lines = [["Pergunta", "Jogador", "Resposta", "Tempo (s)", "Certo?", "Combo", "Bônus (pts)", "Pontos"].join(";")];
   r.perQuestion.forEach((q, idx) => {
     q.rows.forEach((row) => {
       lines.push([
@@ -1381,6 +1399,7 @@ function downloadReportCsv(r) {
         row.timeMs != null ? (row.timeMs / 1000).toFixed(1) : "",
         row.correct ? "sim" : "não",
         row.combo >= 2 ? `x${row.combo}` : "",
+        row.combo >= 2 ? row.bonus : "",
         row.points,
       ].join(";"));
     });
@@ -1432,7 +1451,7 @@ function downloadReportPdf(r) {
         row.selectedLabels,
         row.timeMs != null ? `${(row.timeMs / 1000).toFixed(1)}s` : "—",
         row.answered ? (row.correct ? "sim" : "não") : "não respondeu",
-        row.combo >= 2 ? `x${row.combo}` : "—",
+        row.combo >= 2 ? `x${row.combo} (+${row.bonus})` : "—",
         row.correct ? `+${row.points}` : "0",
       ]),
       ...AUTOTABLE_THEME,

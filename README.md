@@ -7,6 +7,9 @@ Um "Kahoot" próprio, sem limite de jogadores e sem custo — dois sites:
 - **`jogo/`** — onde os participantes entram pelo celular com um código
   de 6 dígitos e jogam. Sem cadastro.
 
+A raiz do site (`index.html`) é só uma página inicial com dois botões,
+levando pra um lado ou pro outro — útil como link único pra compartilhar.
+
 Pra saber o que o app faz (tipos de pergunta, pontuação, avatar,
 relatórios, PDF etc.), veja o `FUNCIONALIDADES.md`. Este arquivo aqui é
 só sobre como configurar e publicar.
