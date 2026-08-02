@@ -5,7 +5,7 @@ import {
 
 import { firebaseConfig } from "../shared/firebase-config.js";
 import { AVATAR_COLORS, SPECIES, SPECIES_LABEL, HATS, GLASSES, defaultAvatar, avatarSVG, avatarPngDataUrl } from "../shared/avatar.js";
-import { kahootPoints, lateJoinAllowed, questionMaxPoints } from "../shared/scoring.js";
+import { lateJoinAllowed, questionMaxPoints, scoreQuestionSequence } from "../shared/scoring.js";
 import { getJsPDF, addPdfHeader, addSectionTitle, AUTOTABLE_THEME } from "../shared/pdf-helpers.js";
 
 const app = initializeApp(firebaseConfig);
@@ -468,6 +468,7 @@ function renderReveal() {
       <div class="big-emoji">${hasAnswered ? (correct ? "✅" : "❌") : "⏱️"}</div>
       <h1 style="font-size:22px; margin-top:8px;">${hasAnswered ? (correct ? "Certinho!" : "Não foi dessa vez") : "Tempo esgotado"}</h1>
       ${myScore ? `<div style="color:var(--gold); font-weight:700; margin-top:4px;">+${myScore.lastPoints} pontos</div>` : ""}
+      ${myScore?.lastCombo >= 2 ? `<div style="color:var(--coral); font-weight:700; font-size:13px; margin-top:2px;">🔥 combo x${myScore.lastCombo}!</div>` : ""}
       <div style="color:var(--text-dim); margin:6px 0 18px;">Total: <b style="color:var(--text);">${myScore?.total ?? 0}</b> pontos</div>
     </div>
     <div style="display:flex; flex-direction:column; gap:10px;">
@@ -537,20 +538,28 @@ async function downloadMyReportPdf() {
       s.questions.map((_, idx) => getDoc(doc(db, "sessions", code, "answers", `${idx}_${playerId}`)))
     );
 
-    const rows = s.questions.map((q, idx) => {
+    const items = s.questions.map((q, idx) => {
       const snap = snaps[idx];
-      if (!snap.exists()) return [q.text, "não respondeu", "—", "não", "0"];
+      if (!snap.exists()) return { correct: false, timeMs: null, timeLimit: q.timeLimit, multiplier: q.pointsMultiplier || 1, ans: null };
       const ans = snap.data();
       const sel = [...(ans.selected || [])].sort().join(",");
       const cor = [...(q.correct || [])].sort().join(",");
       const correct = sel === cor && sel !== "";
-      const pts = correct ? kahootPoints(ans.timeMs, q.timeLimit, q.pointsMultiplier || 1) : 0;
+      return { correct, timeMs: ans.timeMs, timeLimit: q.timeLimit, multiplier: q.pointsMultiplier || 1, ans };
+    });
+    const scored = scoreQuestionSequence(items, !!s.precisionMode);
+
+    const rows = s.questions.map((q, idx) => {
+      const item = items[idx];
+      const sc = scored[idx];
+      if (!item.ans) return [q.text, "não respondeu", "—", "não", "—", "0"];
       return [
         q.text,
-        (ans.selected || []).map((i) => q.options[i]).join(", "),
-        `${((ans.timeMs || 0) / 1000).toFixed(1)}s`,
-        correct ? "sim" : "não",
-        correct ? `+${pts}` : "0",
+        (item.ans.selected || []).map((i) => q.options[i]).join(", "),
+        `${((item.timeMs || 0) / 1000).toFixed(1)}s`,
+        item.correct ? "sim" : "não",
+        sc.combo >= 2 ? `x${sc.combo}` : "—",
+        item.correct ? `+${sc.points}` : "0",
       ];
     });
 
@@ -577,7 +586,7 @@ async function downloadMyReportPdf() {
     y = addSectionTitle(doc_, "Pergunta a pergunta", y);
     doc_.autoTable({
       startY: y,
-      head: [["Pergunta", "Sua resposta", "Tempo", "Certo?", "Pontos"]],
+      head: [["Pergunta", "Sua resposta", "Tempo", "Certo?", "Combo", "Pontos"]],
       body: rows,
       columnStyles: { 0: { cellWidth: 60 } },
       ...AUTOTABLE_THEME,

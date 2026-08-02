@@ -10,10 +10,10 @@ import {
 import { firebaseConfig } from "../shared/firebase-config.js";
 import { UNSPLASH_ACCESS_KEY } from "../shared/unsplash-config.js";
 import { avatarSVG } from "../shared/avatar.js";
-import { kahootPoints, questionMaxPoints } from "../shared/scoring.js";
+import { questionMaxPoints, nextQuestionScore, scoreQuestionSequence } from "../shared/scoring.js";
 import { getJsPDF, addPdfHeader, addSectionTitle, AUTOTABLE_THEME } from "../shared/pdf-helpers.js";
 import { parseQuizText, IMPORT_TEMPLATE } from "../shared/import-parser.js";
-import { SUGGESTED_SOURCES } from "../shared/music-tracks.js";
+import { MUSIC_TRACKS, findTrack, SUGGESTED_SOURCES } from "../shared/music-tracks.js";
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
@@ -97,7 +97,7 @@ function emptyQuestion(timeLimit = 20) {
   return { id: rid(), text: "", type: "single", options: ["", ""], correct: [], timeLimit, pointsMultiplier: 1, imageUrl: null, imageCredit: null };
 }
 function emptyQuiz() {
-  return { id: null, title: "", theme: "", coverImage: null, coverCredit: null, defaultTimeLimit: 20, musicUrl: null, questions: [] };
+  return { id: null, title: "", theme: "", coverImage: null, coverCredit: null, defaultTimeLimit: 20, musicUrl: null, precisionMode: false, questions: [] };
 }
 
 function subscribeQuizzes() {
@@ -214,6 +214,7 @@ async function duplicateQuiz(q) {
     coverCredit: copy.coverCredit || null,
     defaultTimeLimit: copy.defaultTimeLimit || 20,
     musicUrl: copy.musicUrl || null,
+    precisionMode: !!copy.precisionMode,
     questions: copy.questions,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
@@ -239,6 +240,7 @@ async function launchSession(quiz) {
     status: "lobby",
     questions: quiz.questions,
     musicUrl: quiz.musicUrl || null,
+    precisionMode: !!quiz.precisionMode,
     currentIndex: -1,
     questionStartedAt: null,
     createdAt: serverTimestamp(),
@@ -275,17 +277,25 @@ function renderEditor() {
 
     <div style="margin-bottom:20px;">
       <label style="font-size:13px; color:var(--text-dim);">Trilha sonora (opcional)</label>
-      <div style="display:flex; gap:8px; margin-top:6px;">
-        <input class="input" id="quiz-music" placeholder="Cole o link direto de um arquivo .mp3 ou .ogg" value="${escapeAttr(q.musicUrl || "")}" style="flex:1;" />
+      <select class="input" id="quiz-music-preset" style="margin-top:6px;">
+        <option value="">— escolher uma faixa pronta —</option>
+        ${MUSIC_TRACKS.map((t) => `<option value="${t.id}" ${q.musicUrl === t.url ? "selected" : ""}>${t.label}</option>`).join("")}
+        <option value="custom" ${q.musicUrl && !MUSIC_TRACKS.some((t) => t.url === q.musicUrl) ? "selected" : ""}>link personalizado (colar abaixo)</option>
+      </select>
+      <div style="display:flex; gap:8px; margin-top:8px;">
+        <input class="input" id="quiz-music" placeholder="Ou cole o link direto de um arquivo .mp3 ou .ogg" value="${escapeAttr(q.musicUrl || "")}" style="flex:1;" />
         <button type="button" class="btn btn-ghost" id="music-test-btn" style="width:auto; padding:10px 16px; white-space:nowrap;">▶ testar</button>
       </div>
       <div id="music-test-result" style="font-size:12px; margin-top:6px;"></div>
       <div style="font-size:11px; color:var(--text-dim); margin-top:6px;">
-        Sem música pronta? Sugestões de domínio público:
-        ${SUGGESTED_SOURCES.map((s) => `<a href="${s.url}" target="_blank" style="color:var(--gold); margin-left:4px;">${s.mood}</a>`).join(" ·")}
-        — abra o link, baixe uma faixa e hospede em algum lugar com link direto (ex: seu próprio repositório no GitHub).
+        Mais opções: ${SUGGESTED_SOURCES.map((s) => `<a href="${s.url}" target="_blank" style="color:var(--gold); margin-left:4px;">${s.mood}</a>`).join(" ·")}
       </div>
     </div>
+
+    <label style="display:flex; align-items:center; gap:8px; margin-bottom:20px; font-size:13px; color:var(--text-dim); cursor:pointer;">
+      <input type="checkbox" id="quiz-precision" ${q.precisionMode ? "checked" : ""} />
+      <span><b style="color:var(--text);">Modo de Precisão</b> — pontuação só pelo acerto (1000 pontos fixos), sem contar velocidade</span>
+    </label>
 
     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
       <div style="font-weight:700; font-family:var(--font-display);">Perguntas</div>
@@ -318,8 +328,22 @@ function renderEditor() {
   document.getElementById("cover-pick-btn").onclick = () => openUnsplash("cover");
   document.getElementById("save-quiz-btn").onclick = saveQuiz;
   document.getElementById("open-import-btn").onclick = openImportModal;
-  document.getElementById("quiz-music").oninput = (e) => (q.musicUrl = e.target.value.trim() || null);
+  document.getElementById("quiz-music-preset").onchange = (e) => {
+    const val = e.target.value;
+    if (val === "custom" || val === "") return;
+    const track = findTrack(val);
+    if (track) {
+      q.musicUrl = track.url;
+      document.getElementById("quiz-music").value = track.url;
+      document.getElementById("music-test-result").innerHTML = "";
+    }
+  };
+  document.getElementById("quiz-music").oninput = (e) => {
+    q.musicUrl = e.target.value.trim() || null;
+    document.getElementById("quiz-music-preset").value = "custom";
+  };
   document.getElementById("music-test-btn").onclick = () => testMusic(document.getElementById("quiz-music").value.trim());
+  document.getElementById("quiz-precision").onchange = (e) => (q.precisionMode = e.target.checked);
 
   renderQuestionList();
   if (!questionDraft) questionDraft = emptyQuestion(q.defaultTimeLimit || 20);
@@ -566,7 +590,7 @@ async function saveQuiz() {
   if (!q.title.trim()) return (errEl.textContent = "Dê um título ao quiz.");
   if (q.questions.length === 0) return (errEl.textContent = "Adicione ao menos uma pergunta.");
   errEl.textContent = "";
-  const payload = { title: q.title.trim(), theme: q.theme.trim(), coverImage: q.coverImage, coverCredit: q.coverCredit, defaultTimeLimit: q.defaultTimeLimit || 20, musicUrl: q.musicUrl || null, questions: q.questions, updatedAt: serverTimestamp() };
+  const payload = { title: q.title.trim(), theme: q.theme.trim(), coverImage: q.coverImage, coverCredit: q.coverCredit, defaultTimeLimit: q.defaultTimeLimit || 20, musicUrl: q.musicUrl || null, precisionMode: !!q.precisionMode, questions: q.questions, updatedAt: serverTimestamp() };
   if (q.id) {
     await updateDoc(doc(db, "quizzes", q.id), payload);
   } else {
@@ -938,17 +962,28 @@ async function revealAnswers() {
 
   for (const pid of Object.keys(sessionPlayers)) {
     const prevScoreSnap = await getDoc(doc(db, "sessions", sessionCode, "scores", pid));
-    const prevTotal = prevScoreSnap.exists() ? prevScoreSnap.data().total || 0 : 0;
-    let pts = 0, correct = false;
+    const prevData = prevScoreSnap.exists() ? prevScoreSnap.data() : {};
+    const prevTotal = prevData.total || 0;
+    const prevStreak = prevData.streak || 0;
+    let correct = false;
     const ans = answersByPlayer[pid];
     if (ans) {
       (ans.selected || []).forEach((i) => { if (stats[i] !== undefined) stats[i]++; });
       const sel = [...(ans.selected || [])].sort().join(",");
       const cor = [...q.correct].sort().join(",");
       correct = sel === cor && sel !== "";
-      if (correct) pts = kahootPoints(ans.timeMs, q.timeLimit, q.pointsMultiplier || 1);
     }
-    writes.push(setDoc(doc(db, "sessions", sessionCode, "scores", pid), { total: prevTotal + pts, lastPoints: pts, lastCorrect: correct }));
+    const { points: pts, newStreak, combo, bonus } = nextQuestionScore({
+      prevStreak,
+      correct,
+      timeMs: ans?.timeMs,
+      timeLimit: q.timeLimit,
+      multiplier: q.pointsMultiplier || 1,
+      precisionMode: !!s.precisionMode,
+    });
+    writes.push(setDoc(doc(db, "sessions", sessionCode, "scores", pid), {
+      total: prevTotal + pts, lastPoints: pts, lastCorrect: correct, streak: newStreak, lastCombo: combo, lastBonus: bonus,
+    }));
   }
   await Promise.all(writes);
   revealStats = stats;
@@ -1156,16 +1191,32 @@ async function openReport(code) {
   answersSnap.forEach((d) => (answers[d.id] = d.data()));
 
   const playerIds = Object.keys(players);
-  const perQuestion = sess.questions.map((q, idx) => {
-    const rows = playerIds.map((pid) => {
+
+  // recalcula pergunta por pergunta, na ordem, pra reconstruir o combo de
+  // cada jogador exatamente como aconteceu ao vivo
+  const perPlayerAnswers = {};
+  playerIds.forEach((pid) => {
+    perPlayerAnswers[pid] = sess.questions.map((q, idx) => {
       const ans = answers[`${idx}_${pid}`];
-      let correct = false, points = 0;
+      let correct = false;
       if (ans) {
         const sel = [...(ans.selected || [])].sort().join(",");
         const cor = [...q.correct].sort().join(",");
         correct = sel === cor && sel !== "";
-        if (correct) points = kahootPoints(ans.timeMs, q.timeLimit, q.pointsMultiplier || 1);
       }
+      return { correct, timeMs: ans?.timeMs, timeLimit: q.timeLimit, multiplier: q.pointsMultiplier || 1, ans };
+    });
+  });
+  const perPlayerScored = {};
+  playerIds.forEach((pid) => {
+    perPlayerScored[pid] = scoreQuestionSequence(perPlayerAnswers[pid], !!sess.precisionMode);
+  });
+
+  const perQuestion = sess.questions.map((q, idx) => {
+    const rows = playerIds.map((pid) => {
+      const item = perPlayerAnswers[pid][idx];
+      const scored = perPlayerScored[pid][idx];
+      const ans = item.ans;
       return {
         playerId: pid,
         name: players[pid].name,
@@ -1173,7 +1224,9 @@ async function openReport(code) {
         answered: !!ans,
         selectedLabels: ans ? ans.selected.map((i) => q.options[i]).join(", ") : "—",
         timeMs: ans?.timeMs ?? null,
-        correct, points,
+        correct: item.correct,
+        points: scored.points,
+        combo: scored.combo,
       };
     });
     return { text: q.text, correctLabels: q.correct.map((i) => q.options[i]).join(", "), rows };
@@ -1183,7 +1236,7 @@ async function openReport(code) {
     playerId: pid,
     name: players[pid].name,
     avatar: players[pid].avatar,
-    total: perQuestion.reduce((sum, q) => sum + (q.rows.find((r) => r.playerId === pid)?.points || 0), 0),
+    total: perPlayerScored[pid].reduce((sum, s) => sum + s.points, 0),
   })).sort((a, b) => b.total - a.total);
 
   reportData = { title: sess.title, code, perQuestion, totals };
@@ -1226,7 +1279,7 @@ function renderReport() {
               <div style="font-weight:600; font-size:13px;">${escapeHtml(row.name)}</div>
               <div style="font-size:12px; color:var(--text-dim);">${escapeHtml(row.selectedLabels)}${row.timeMs != null ? ` · ${(row.timeMs / 1000).toFixed(1)}s` : ""}</div>
             </span>
-            <span style="color:${row.correct ? "var(--green)" : "var(--coral)"}; font-weight:700; font-size:13px;">${row.correct ? `+${row.points}` : "0"}</span>
+            <span style="color:${row.correct ? "var(--green)" : "var(--coral)"}; font-weight:700; font-size:13px;">${row.correct ? `+${row.points}` : "0"}${row.combo >= 2 ? ` <span style="color:var(--gold); font-size:11px;">🔥x${row.combo}</span>` : ""}</span>
           </div>
         `).join("")}
       </div>
@@ -1238,7 +1291,7 @@ function renderReport() {
 }
 
 function downloadReportCsv(r) {
-  const lines = [["Pergunta", "Jogador", "Resposta", "Tempo (s)", "Certo?", "Pontos"].join(";")];
+  const lines = [["Pergunta", "Jogador", "Resposta", "Tempo (s)", "Certo?", "Combo", "Pontos"].join(";")];
   r.perQuestion.forEach((q, idx) => {
     q.rows.forEach((row) => {
       lines.push([
@@ -1247,6 +1300,7 @@ function downloadReportCsv(r) {
         `"${row.selectedLabels.replace(/"/g, '""')}"`,
         row.timeMs != null ? (row.timeMs / 1000).toFixed(1) : "",
         row.correct ? "sim" : "não",
+        row.combo >= 2 ? `x${row.combo}` : "",
         row.points,
       ].join(";"));
     });
@@ -1292,12 +1346,13 @@ function downloadReportPdf(r) {
 
     doc.autoTable({
       startY: y,
-      head: [["Jogador", "Resposta", "Tempo", "Certo?", "Pontos"]],
+      head: [["Jogador", "Resposta", "Tempo", "Certo?", "Combo", "Pontos"]],
       body: q.rows.map((row) => [
         row.name,
         row.selectedLabels,
         row.timeMs != null ? `${(row.timeMs / 1000).toFixed(1)}s` : "—",
         row.answered ? (row.correct ? "sim" : "não") : "não respondeu",
+        row.combo >= 2 ? `x${row.combo}` : "—",
         row.correct ? `+${row.points}` : "0",
       ]),
       ...AUTOTABLE_THEME,

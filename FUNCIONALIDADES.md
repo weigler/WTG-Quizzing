@@ -29,11 +29,12 @@ editor) podem ser duplicados com um clique — acelera montar variações ou
 perguntas parecidas.
 
 ### Trilha sonora
-Cada quiz pode ter uma música de fundo — você cola o link direto de um
-arquivo de áudio (.mp3/.ogg) e testa na hora, antes de salvar, pra ter
-certeza que funciona. Toca na tela de quem está controlando o jogo (não
-no celular de cada jogador, pra não virar uma bagunça de sons), com botão
-pra silenciar a qualquer momento.
+Cada quiz pode ter uma música de fundo: escolha entre 6 faixas prontas
+(gratuitas, da ElevenLabs) ou cole o link direto de qualquer outro
+arquivo de áudio (.mp3/.ogg) — com botão pra testar na hora, antes de
+salvar. Toca na tela de quem está controlando o jogo (não no celular de
+cada jogador, pra não virar uma bagunça de sons), com botão pra
+silenciar a qualquer momento.
 
 ### Cadastro de quizzes
 Dá pra criar quantos quizzes quiser, com temas diferentes — um sobre um
@@ -75,7 +76,17 @@ jogo, dá pra retomar o controle de onde parou.
 ### Pontuação
 Igual ao Kahoot: errar vale zero. Acertar vale entre 500 e 1000 pontos,
 dependendo da velocidade da resposta — quem responde certo mais rápido
-ganha mais.
+ganha mais. Respondeu em **menos de meio segundo**? Pontuação máxima
+garantida, sem desconto nenhum de tempo.
+
+**Combo:** acertar perguntas seguidas ativa um bônus que vai aumentando
+(+50 por nível, até um teto de +250), mostrado na hora da revelação e no
+relatório final.
+
+**Modo de Precisão:** ative essa opção no quiz pra pontuação valer só
+pelo acerto — sempre 1000 pontos (ou mais, com bônus) quando certo,
+não importa a velocidade. Bom pra quizzes onde pensar com calma deveria
+valer tanto quanto ser rápido.
 
 ### Relatório completo
 Depois (ou durante) qualquer sessão, dá pra ver um relatório detalhado:
