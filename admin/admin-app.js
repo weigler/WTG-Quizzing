@@ -13,6 +13,7 @@ import { avatarSVG } from "../shared/avatar.js";
 import { kahootPoints, questionMaxPoints } from "../shared/scoring.js";
 import { getJsPDF, addPdfHeader, addSectionTitle, AUTOTABLE_THEME } from "../shared/pdf-helpers.js";
 import { parseQuizText, IMPORT_TEMPLATE } from "../shared/import-parser.js";
+import { MUSIC_TRACKS, trackUrl, findTrack } from "../shared/music-tracks.js";
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
@@ -41,6 +42,11 @@ let reportData = null;     // relatório carregado pra exibição
 
 let currentUser = null;    // usuário logado (dono dos quizzes/sessões)
 
+let musicAudioEl = null;
+let musicToggleEl = null;
+let musicMuted = false;
+let previewAudioEl = null;
+
 const OPTION_COLORS = ["opt-0", "opt-1", "opt-2", "opt-3", "opt-4", "opt-5"];
 const OPTION_SHAPES = ["opt-diamond", "opt-triangle", "opt-circle", "opt-square", "opt-pentagon", "opt-hexagon"];
 
@@ -63,6 +69,8 @@ onAuthStateChanged(auth, (user) => {
     unsubSessionsList && unsubSessionsList();
     quizzes = [];
     sessionsList = [];
+    if (musicAudioEl) musicAudioEl.pause();
+    if (musicToggleEl) musicToggleEl.style.display = "none";
   }
 });
 
@@ -89,7 +97,7 @@ function emptyQuestion(timeLimit = 20) {
   return { id: rid(), text: "", type: "single", options: ["", ""], correct: [], timeLimit, pointsMultiplier: 1, imageUrl: null, imageCredit: null };
 }
 function emptyQuiz() {
-  return { id: null, title: "", theme: "", coverImage: null, coverCredit: null, defaultTimeLimit: 20, questions: [] };
+  return { id: null, title: "", theme: "", coverImage: null, coverCredit: null, defaultTimeLimit: 20, musicTrackId: null, questions: [] };
 }
 
 function subscribeQuizzes() {
@@ -111,6 +119,7 @@ function subscribeQuizzes() {
 /* ---------------- render raiz ---------------- */
 function render() {
   try {
+    updateMusicForSession(view === "control" ? sessionData : null);
     if (view === "list") return renderList();
     if (view === "editor") return renderEditor();
     if (view === "control") return renderControl();
@@ -204,6 +213,7 @@ async function duplicateQuiz(q) {
     coverImage: copy.coverImage || null,
     coverCredit: copy.coverCredit || null,
     defaultTimeLimit: copy.defaultTimeLimit || 20,
+    musicTrackId: copy.musicTrackId || null,
     questions: copy.questions,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
@@ -228,6 +238,7 @@ async function launchSession(quiz) {
     ownerId: currentUser.uid,
     status: "lobby",
     questions: quiz.questions,
+    musicTrackId: quiz.musicTrackId || null,
     currentIndex: -1,
     questionStartedAt: null,
     createdAt: serverTimestamp(),
@@ -262,6 +273,15 @@ function renderEditor() {
       <button type="button" class="btn-link" id="apply-time-all" style="margin-left:auto;">aplicar a todas as perguntas já criadas</button>
     </div>
 
+    <div style="display:flex; align-items:center; gap:10px; margin-bottom:20px; flex-wrap:wrap;">
+      <label style="font-size:13px; color:var(--text-dim); white-space:nowrap;">Trilha sonora</label>
+      <select class="input" id="quiz-music" style="flex:1; min-width:200px;">
+        <option value="">nenhuma</option>
+        ${MUSIC_TRACKS.map((t) => `<option value="${t.id}" ${q.musicTrackId === t.id ? "selected" : ""}>${t.label}</option>`).join("")}
+      </select>
+      <button type="button" class="btn-link" id="music-preview-btn">▶ ouvir prévia</button>
+    </div>
+
     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
       <div style="font-weight:700; font-family:var(--font-display);">Perguntas</div>
       <button type="button" class="btn btn-ghost" id="open-import-btn" style="width:auto; padding:8px 14px; font-size:13px;">Importar perguntas</button>
@@ -293,6 +313,8 @@ function renderEditor() {
   document.getElementById("cover-pick-btn").onclick = () => openUnsplash("cover");
   document.getElementById("save-quiz-btn").onclick = saveQuiz;
   document.getElementById("open-import-btn").onclick = openImportModal;
+  document.getElementById("quiz-music").onchange = (e) => (q.musicTrackId = e.target.value || null);
+  document.getElementById("music-preview-btn").onclick = () => previewMusic(document.getElementById("quiz-music").value);
 
   renderQuestionList();
   if (!questionDraft) questionDraft = emptyQuestion(q.defaultTimeLimit || 20);
@@ -381,7 +403,8 @@ function renderQuestionForm() {
       </div>
     </div>
 
-    <textarea class="input" id="q-text" placeholder="Escreva a pergunta..." style="min-height:60px; margin-bottom:12px;">${escapeHtml(d.text)}</textarea>
+    <textarea class="input" id="q-text" placeholder="Escreva a pergunta..." maxlength="150" style="min-height:60px; margin-bottom:4px;">${escapeHtml(d.text)}</textarea>
+    <div id="q-text-count" style="text-align:right; font-size:11px; color:var(--text-dim); margin-bottom:8px;">${d.text.length}/150</div>
 
     <div style="display:flex; gap:10px; margin-bottom:12px; flex-wrap:wrap;">
       <select class="input" id="q-type" style="flex:0 1 180px; min-width:150px;">
@@ -418,7 +441,10 @@ function renderQuestionForm() {
 
   document.getElementById("q-img-pick").onclick = () => openUnsplash("question");
   document.getElementById("q-img-remove")?.addEventListener("click", () => { d.imageUrl = null; d.imageCredit = null; renderQuestionForm(); });
-  document.getElementById("q-text").oninput = (e) => (d.text = e.target.value);
+  document.getElementById("q-text").oninput = (e) => {
+    d.text = e.target.value;
+    document.getElementById("q-text-count").textContent = `${d.text.length}/150`;
+  };
   document.getElementById("q-time").oninput = (e) => (d.timeLimit = Math.max(5, Math.min(60, Number(e.target.value) || 20)));
   document.getElementById("q-multiplier").onchange = (e) => (d.pointsMultiplier = Number(e.target.value) || 1);
   document.getElementById("q-type").onchange = (e) => {
@@ -466,7 +492,7 @@ function renderOptionRows() {
   el.innerHTML = d.options.map((opt, i) => `
     <div class="opt-row">
       <span class="swatch ${OPTION_COLORS[i % 6]}"><span class="${OPTION_SHAPES[i % 6]}" style="width:11px;height:11px;"></span></span>
-      <input class="input" data-opt="${i}" placeholder="Opção ${i + 1}" value="${escapeAttr(opt)}" style="flex:1;" />
+      <input class="input" data-opt="${i}" placeholder="Opção ${i + 1}" maxlength="80" value="${escapeAttr(opt)}" style="flex:1;" />
       <label class="check-label"><input type="checkbox" data-correct="${i}" ${d.correct.includes(i) ? "checked" : ""}/> certa</label>
       <button type="button" class="btn-link" data-moveup="${i}" ${i === 0 ? "disabled" : ""} title="mover pra cima">▲</button>
       <button type="button" class="btn-link" data-movedown="${i}" ${i === d.options.length - 1 ? "disabled" : ""} title="mover pra baixo">▼</button>
@@ -535,7 +561,7 @@ async function saveQuiz() {
   if (!q.title.trim()) return (errEl.textContent = "Dê um título ao quiz.");
   if (q.questions.length === 0) return (errEl.textContent = "Adicione ao menos uma pergunta.");
   errEl.textContent = "";
-  const payload = { title: q.title.trim(), theme: q.theme.trim(), coverImage: q.coverImage, coverCredit: q.coverCredit, defaultTimeLimit: q.defaultTimeLimit || 20, questions: q.questions, updatedAt: serverTimestamp() };
+  const payload = { title: q.title.trim(), theme: q.theme.trim(), coverImage: q.coverImage, coverCredit: q.coverCredit, defaultTimeLimit: q.defaultTimeLimit || 20, musicTrackId: q.musicTrackId || null, questions: q.questions, updatedAt: serverTimestamp() };
   if (q.id) {
     await updateDoc(doc(db, "quizzes", q.id), payload);
   } else {
@@ -611,7 +637,60 @@ function renderImportPreview() {
   document.getElementById("import-confirm-btn").disabled = questions.length === 0;
 }
 
+/* ================= MÚSICA ================= */
+function previewMusic(trackId) {
+  if (previewAudioEl) { previewAudioEl.pause(); previewAudioEl = null; }
+  const track = findTrack(trackId);
+  if (!track) return;
+  previewAudioEl = new Audio(trackUrl(track.file));
+  previewAudioEl.volume = 0.5;
+  previewAudioEl.play().catch(() => alert("Não consegui tocar a prévia agora."));
+  setTimeout(() => { if (previewAudioEl) previewAudioEl.pause(); }, 8000);
+}
+
+function ensureMusicUi() {
+  if (musicToggleEl) return;
+  musicToggleEl = document.createElement("button");
+  musicToggleEl.id = "music-toggle-btn";
+  musicToggleEl.style.cssText = "position:fixed; top:14px; right:14px; background:var(--surface); border:1px solid var(--surface-line); color:var(--text); border-radius:999px; padding:8px 13px; z-index:50; cursor:pointer; font-size:16px; display:none;";
+  musicToggleEl.textContent = "🔊";
+  musicToggleEl.onclick = () => {
+    musicMuted = !musicMuted;
+    if (musicAudioEl) {
+      if (musicMuted) musicAudioEl.pause();
+      else musicAudioEl.play().catch(() => {});
+    }
+    musicToggleEl.textContent = musicMuted ? "🔇" : "🔊";
+  };
+  document.body.appendChild(musicToggleEl);
+}
+
+function updateMusicForSession(s) {
+  ensureMusicUi();
+  if (!s || s.status === "ended" || !s.musicTrackId) {
+    if (musicAudioEl) musicAudioEl.pause();
+    musicToggleEl.style.display = "none";
+    return;
+  }
+  const track = findTrack(s.musicTrackId);
+  if (!track) { musicToggleEl.style.display = "none"; return; }
+  if (!musicAudioEl) {
+    musicAudioEl = document.createElement("audio");
+    musicAudioEl.loop = true;
+    musicAudioEl.volume = 0.32;
+    document.body.appendChild(musicAudioEl);
+  }
+  if (musicAudioEl.dataset.trackId !== s.musicTrackId) {
+    musicAudioEl.dataset.trackId = s.musicTrackId;
+    musicAudioEl.src = trackUrl(track.file);
+    if (!musicMuted) musicAudioEl.play().catch(() => {});
+  }
+  musicToggleEl.style.display = "block";
+  musicToggleEl.textContent = musicMuted ? "🔇" : "🔊";
+}
+
 /* ================= BUSCA UNSPLASH ================= */
+
 function openUnsplash(target) {
   imageTarget = target;
   document.getElementById("unsplash-modal").style.display = "flex";
@@ -879,7 +958,7 @@ function renderReveal() {
         <div class="bar-row" style="opacity:${isCorrect ? 1 : 0.45}">
           <span class="${OPTION_SHAPES[i % 6]}" style="width:14px;height:14px;background:var(--text-dim);"></span>
           <div class="bar-track" style="${isCorrect ? "background:rgba(61,220,151,.16); border:2px solid var(--green);" : ""}">
-            <div class="bar-fill ${OPTION_COLORS[i % 6]}" style="width:${pct}%;"></div>
+            <div class="bar-fill" style="width:${pct}%; background:${isCorrect ? "var(--green)" : "var(--text-dim)"};"></div>
             <div class="bar-label">${escapeHtml(opt)} ${isCorrect ? "✓ certa" : ""}</div>
           </div>
           <span style="width:30px; text-align:right; font-size:13px; color:var(--text-dim);">${count}</span>

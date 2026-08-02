@@ -28,6 +28,12 @@ Tanto quizzes inteiros (na lista) quanto perguntas individuais (dentro do
 editor) podem ser duplicados com um clique — acelera montar variações ou
 perguntas parecidas.
 
+### Trilha sonora
+Cada quiz pode ter uma música de fundo, escolhida entre 5 opções (alegre,
+suspense, tensão, vitória, leve) — todas de domínio público. Toca na tela
+de quem está controlando o jogo (não no celular de cada jogador, pra não
+virar uma bagunça de sons), com botão pra silenciar a qualquer momento.
+
 ### Cadastro de quizzes
 Dá pra criar quantos quizzes quiser, com temas diferentes — um sobre um
 livro, outro só de curiosidades, outro pra uma data comemorativa. Cada
@@ -44,6 +50,8 @@ quiz fica salvo e pode ser reaberto quantas vezes quiser.
   fotos Unsplash
 - Perguntas podem ser marcadas como **bônus**, valendo 2x ou 3x a
   pontuação normal — útil pra compensar quem entrar depois do início
+- Pergunta limitada a 150 caracteres e cada opção a 80 — garante que tudo
+  cabe direitinho na tela durante o jogo, mesmo em celulares pequenos
 
 ### Entrada tardia
 Se alguém entrar depois que o jogo já começou, o app calcula se ainda

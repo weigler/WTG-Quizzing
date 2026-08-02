@@ -135,12 +135,17 @@ function parsePlainText(raw) {
     }
 
     const type = typeOverride || (isTF ? "tf" : correct.length > 1 ? "multiple" : "single");
+    const finalText = text.length > 150 ? text.slice(0, 150) : text;
+    const finalOptions = options.map((o) => (o.length > 80 ? o.slice(0, 80) : o));
+    if (finalText.length < text.length || finalOptions.some((o, i) => o.length < options[i].length)) {
+      warnings.push(`Pergunta "${text.slice(0, 40)}...": texto cortado (limite de 150 caracteres na pergunta, 80 nas opções).`);
+    }
 
     questions.push({
       id: rid(),
-      text,
+      text: finalText,
       type,
-      options,
+      options: finalOptions,
       correct,
       timeLimit: timeLimit || null,
       pointsMultiplier: multiplier,
@@ -186,9 +191,9 @@ function parseJson(raw) {
 
     questions.push({
       id: rid(),
-      text,
+      text: text.length > 150 ? text.slice(0, 150) : text,
       type,
-      options: type === "tf" ? ["Verdadeiro", "Falso"] : options,
+      options: (type === "tf" ? ["Verdadeiro", "Falso"] : options).map((o) => (o.length > 80 ? o.slice(0, 80) : o)),
       correct,
       timeLimit: Number(item.timeLimit || item.tempo) || null,
       pointsMultiplier: Number(item.pointsMultiplier || item.multiplicador) || 1,

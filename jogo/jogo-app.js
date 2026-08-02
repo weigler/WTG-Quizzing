@@ -1,10 +1,10 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import {
-  getFirestore, doc, collection, setDoc, getDoc, onSnapshot,
+  getFirestore, doc, collection, setDoc, getDoc, getDocs, onSnapshot,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 import { firebaseConfig } from "../shared/firebase-config.js";
-import { AVATAR_COLORS, HATS, GLASSES, MOUTHS, defaultAvatar, avatarSVG, avatarPngDataUrl } from "../shared/avatar.js";
+import { AVATAR_COLORS, SPECIES, SPECIES_LABEL, HATS, GLASSES, defaultAvatar, avatarSVG, avatarPngDataUrl } from "../shared/avatar.js";
 import { kahootPoints, lateJoinAllowed, questionMaxPoints } from "../shared/scoring.js";
 import { getJsPDF, addPdfHeader, addSectionTitle, AUTOTABLE_THEME } from "../shared/pdf-helpers.js";
 
@@ -214,6 +214,7 @@ function render() {
   root.className = "container";
   try {
     if (view === "join") return renderJoin();
+    if (view === "lookup") return renderLookup();
     if (view === "avatar") return renderAvatarPicker();
     if (view === "wait") return renderWait();
     if (view === "question") return renderQuestion();
@@ -240,17 +241,119 @@ function renderJoin() {
     <input class="input" id="join-name" placeholder="Seu nome" maxlength="20" style="margin-top:12px;" />
     <div id="join-error" class="error-text"></div>
     <button class="btn btn-primary btn-block" id="join-btn" style="margin-top:18px;">Entrar →</button>
+    <button class="btn-link" id="lookup-link" style="margin-top:16px;">já joguei — buscar meu resultado</button>
   `;
   const codeInput = document.getElementById("join-code");
   codeInput.oninput = () => (codeInput.value = codeInput.value.replace(/\D/g, "").slice(0, 6));
   if (joinCodeValue) document.getElementById("join-name").focus();
   document.getElementById("join-btn").onclick = () => goToAvatarStep(codeInput.value, document.getElementById("join-name").value);
+  document.getElementById("lookup-link").onclick = () => { view = "lookup"; render(); };
+}
+
+/* ---------------- buscar resultado de jogo encerrado ---------------- */
+let lookupCandidates = [];
+
+function renderLookup() {
+  root.innerHTML = `
+    <button class="btn-link" id="lookup-back" style="align-self:flex-start; margin-bottom:16px;">← voltar</button>
+    <div class="eyebrow">buscar resultado</div>
+    <h1 style="font-size:24px; margin-top:6px;">Já joguei, quero ver como fui</h1>
+    <p style="color:var(--text-dim); margin-top:6px; font-size:13px;">Só funciona pra jogos que já terminaram.</p>
+    <input class="input" id="lookup-code" placeholder="Código da sala (000000)" maxlength="6" style="text-align:center; font-size:22px; letter-spacing:4px; font-family:var(--font-display); margin-top:16px;" />
+    <input class="input" id="lookup-name" placeholder="O nome que você usou no jogo" maxlength="20" style="margin-top:12px;" />
+    <div id="lookup-error" class="error-text"></div>
+    <button class="btn btn-primary btn-block" id="lookup-btn" style="margin-top:18px;">Buscar →</button>
+  `;
+  const codeInput = document.getElementById("lookup-code");
+  codeInput.oninput = () => (codeInput.value = codeInput.value.replace(/\D/g, "").slice(0, 6));
+  document.getElementById("lookup-back").onclick = () => { view = "join"; render(); };
+  document.getElementById("lookup-btn").onclick = () =>
+    lookupResult(codeInput.value, document.getElementById("lookup-name").value);
+}
+
+function showLookupError(msg) {
+  const el = document.getElementById("lookup-error");
+  if (el) el.textContent = msg;
+}
+
+async function lookupResult(inputCode, inputName) {
+  const c = inputCode.trim();
+  const nm = inputName.trim();
+  if (!/^\d{6}$/.test(c)) return showLookupError("Digite o código de 6 dígitos da sala.");
+  if (!nm) return showLookupError("Digite o nome que você usou no jogo.");
+
+  const btn = document.getElementById("lookup-btn");
+  if (btn) { btn.disabled = true; btn.textContent = "Buscando..."; }
+
+  try {
+    const snap = await getDoc(doc(db, "sessions", c));
+    if (!snap.exists()) return showLookupError("Não encontrei essa sala.");
+    const sess = snap.data();
+    if (sess.status !== "ended") return showLookupError("Esse jogo ainda não terminou — volte quando ele acabar.");
+
+    const playersSnap = await getDocs(collection(db, "sessions", c, "players"));
+    const target = nm.toLowerCase();
+    const matches = playersSnap.docs.filter((d) => (d.data().name || "").trim().toLowerCase() === target);
+
+    if (matches.length === 0) return showLookupError("Não encontrei ninguém com esse nome nessa sala.");
+    if (matches.length === 1) {
+      await openLookupResult(c, sess, matches[0].id, matches[0].data());
+      return;
+    }
+    lookupCandidates = matches.map((d) => ({ id: d.id, ...d.data() }));
+    renderLookupPick(c, sess);
+  } catch (err) {
+    console.error("Erro ao buscar resultado:", err);
+    showLookupError("Não consegui buscar agora. Tenta de novo.");
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "Buscar →"; }
+  }
+}
+
+function renderLookupPick(c, sess) {
+  root.innerHTML = `
+    <div class="eyebrow">mais de uma pessoa com esse nome</div>
+    <h1 style="font-size:20px; margin-top:6px;">Qual é você?</h1>
+    <div style="display:flex; flex-direction:column; gap:10px; margin-top:16px;">
+      ${lookupCandidates.map((p, i) => `
+        <button type="button" class="option-btn" style="background:var(--surface); color:var(--text); border:1.5px solid var(--surface-line);" data-i="${i}">
+          <span class="mini-avatar">${avatarSVG(p.avatar, 30)}</span>
+          <span>${escapeHtml(p.name)}</span>
+        </button>
+      `).join("")}
+    </div>
+    <button class="btn-link" id="lookup-pick-back" style="margin-top:16px;">← voltar</button>
+  `;
+  document.getElementById("lookup-pick-back").onclick = () => { view = "lookup"; render(); };
+  root.querySelectorAll("[data-i]").forEach((btn) => {
+    btn.onclick = () => {
+      const p = lookupCandidates[Number(btn.dataset.i)];
+      openLookupResult(c, sess, p.id, p);
+    };
+  });
+}
+
+async function openLookupResult(c, sess, pid, playerData) {
+  code = c;
+  playerId = pid;
+  playerName = playerData.name;
+  avatarDraft = playerData.avatar || defaultAvatar();
+  sessionData = sess;
+  const scoreSnap = await getDoc(doc(db, "sessions", c, "scores", pid));
+  myScore = scoreSnap.exists() ? scoreSnap.data() : null;
+  hasAnswered = true;
+  view = "end";
+  render();
 }
 
 function renderAvatarPicker() {
   root.innerHTML = `
-    <div class="eyebrow">monte seu personagem</div>
+    <div class="eyebrow">monte seu bichinho</div>
     <div id="avatar-preview" style="margin:14px 0;"></div>
+    <div class="avatar-section-label">bicho</div>
+    <div class="chip-row" id="avatar-species">
+      ${SPECIES.map((sp) => `<button type="button" class="chip" data-species="${sp}">${SPECIES_LABEL[sp]}</button>`).join("")}
+    </div>
     <div class="avatar-section-label">cor</div>
     <div class="swatch-row" id="avatar-colors">
       ${AVATAR_COLORS.map((c) => `<button type="button" class="color-dot" data-color="${c}" style="background:${c};"></button>`).join("")}
@@ -263,32 +366,27 @@ function renderAvatarPicker() {
     <div class="chip-row" id="avatar-glasses">
       ${GLASSES.map((g) => `<button type="button" class="chip" data-glasses="${g}">${glassesLabel(g)}</button>`).join("")}
     </div>
-    <div class="avatar-section-label">expressão</div>
-    <div class="chip-row" id="avatar-mouths">
-      ${MOUTHS.map((m) => `<button type="button" class="chip" data-mouth="${m}">${mouthLabel(m)}</button>`).join("")}
-    </div>
     <button class="btn btn-primary btn-block" id="avatar-confirm" style="margin-top:20px;">Entrar →</button>
     <button class="btn-link" id="avatar-back" style="margin-top:10px;">← voltar</button>
   `;
   paintAvatarPicker();
   document.getElementById("avatar-back").onclick = () => { view = "join"; render(); };
   document.getElementById("avatar-confirm").onclick = joinRoom;
+  document.querySelectorAll("#avatar-species [data-species]").forEach((b) => (b.onclick = () => { avatarDraft.species = b.dataset.species; paintAvatarPicker(); }));
   document.querySelectorAll("#avatar-colors [data-color]").forEach((b) => (b.onclick = () => { avatarDraft.color = b.dataset.color; paintAvatarPicker(); }));
   document.querySelectorAll("#avatar-hats [data-hat]").forEach((b) => (b.onclick = () => { avatarDraft.hat = b.dataset.hat; paintAvatarPicker(); }));
   document.querySelectorAll("#avatar-glasses [data-glasses]").forEach((b) => (b.onclick = () => { avatarDraft.glasses = b.dataset.glasses; paintAvatarPicker(); }));
-  document.querySelectorAll("#avatar-mouths [data-mouth]").forEach((b) => (b.onclick = () => { avatarDraft.mouth = b.dataset.mouth; paintAvatarPicker(); }));
 }
 
-function hatLabel(h) { return { none: "nenhum", cap: "boné", crown: "coroa", party: "festa", headband: "faixa" }[h]; }
-function glassesLabel(g) { return { none: "nenhum", round: "redondo", cool: "estiloso" }[g]; }
-function mouthLabel(m) { return { smile: "sorriso", open: "surpreso", flat: "sério" }[m]; }
+function hatLabel(h) { return { none: "nenhum", cap: "boné", crown: "coroa", party: "festa", headband: "faixa", bow: "laço", flower: "flores", wizard: "mago", cowboy: "cowboy" }[h]; }
+function glassesLabel(g) { return { none: "nenhum", round: "redondo", cool: "estiloso", star: "estrela" }[g]; }
 
 function paintAvatarPicker() {
   document.getElementById("avatar-preview").innerHTML = avatarSVG(avatarDraft, 120);
+  document.querySelectorAll("#avatar-species [data-species]").forEach((b) => b.classList.toggle("active", b.dataset.species === avatarDraft.species));
   document.querySelectorAll("#avatar-colors [data-color]").forEach((b) => b.classList.toggle("active", b.dataset.color === avatarDraft.color));
   document.querySelectorAll("#avatar-hats [data-hat]").forEach((b) => b.classList.toggle("active", b.dataset.hat === avatarDraft.hat));
   document.querySelectorAll("#avatar-glasses [data-glasses]").forEach((b) => b.classList.toggle("active", b.dataset.glasses === avatarDraft.glasses));
-  document.querySelectorAll("#avatar-mouths [data-mouth]").forEach((b) => b.classList.toggle("active", b.dataset.mouth === avatarDraft.mouth));
 }
 
 function renderWait() {
@@ -317,9 +415,10 @@ function renderQuestion() {
   }
 
   root.innerHTML = `
-    <div class="eyebrow" id="timer-label">carregando...</div>
-    ${q.pointsMultiplier > 1 ? `<div style="color:var(--gold); font-size:12px; font-weight:700; margin-top:4px;">🎁 pergunta bônus · vale ${q.pointsMultiplier}x</div>` : ""}
-    ${q.imageUrl ? `<img class="q-image" src="${q.imageUrl}" />` : ""}
+    <div class="eyebrow" style="text-align:center;">pergunta ${s.currentIndex + 1} de ${s.questions.length}</div>
+    <div class="timer-ring" id="timer-ring"><span id="timer-num">--</span></div>
+    ${q.pointsMultiplier > 1 ? `<div style="color:var(--gold); font-size:12px; font-weight:700; margin-top:8px; text-align:center;">🎁 pergunta bônus · vale ${q.pointsMultiplier}x</div>` : ""}
+    ${q.imageUrl ? `<img class="q-image" src="${q.imageUrl}" style="margin-top:12px;" />` : ""}
     <h2 style="font-size:19px; margin:10px 0 14px;">${escapeHtml(q.text)}</h2>
     <div style="display:flex; flex-direction:column; gap:10px;" id="options"></div>
     ${q.type === "multiple" ? `<button class="btn btn-primary btn-block" id="confirm-btn" style="margin-top:16px;" disabled>Confirmar resposta</button>` : ""}
@@ -350,8 +449,10 @@ function renderQuestion() {
   const draw = () => {
     const elapsed = (Date.now() - (s.questionStartedAt || Date.now())) / 1000;
     const remaining = Math.max(0, Math.ceil(q.timeLimit - elapsed));
-    const label = document.getElementById("timer-label");
-    if (label) { label.textContent = `${remaining}s restantes`; label.style.color = remaining <= 5 ? "var(--coral)" : "var(--gold)"; }
+    const num = document.getElementById("timer-num");
+    const ring = document.getElementById("timer-ring");
+    if (num) num.textContent = remaining;
+    if (ring) ring.classList.toggle("low", remaining <= 5);
   };
   draw();
   liveTimerInt = setInterval(draw, 250);
