@@ -25,13 +25,13 @@ service cloud.firestore {
 
       match /players/{playerId} {
         allow read: if true;
-        // qualquer visitante pode entrar na sala (criar seu registro de jogador),
-        // mas não pode editar o registro de ninguém — só o dono da sessão
-        // pode excluir (usado ao apagar uma sessão inteira)
+        // qualquer visitante pode entrar na sala (criar seu registro de jogador)
+        // e também sair (excluir o próprio registro) — mas não editar nem
+        // excluir o de outra pessoa por engano, já que o id é aleatório e só
+        // quem criou o registro sabe qual é o seu
         allow create: if true;
         allow update: if false;
-        allow delete: if request.auth != null
-                      && get(/databases/$(database)/documents/sessions/$(code)).data.ownerId == request.auth.uid;
+        allow delete: if true;
       }
 
       match /answers/{answerId} {

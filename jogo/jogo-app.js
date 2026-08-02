@@ -1,6 +1,6 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import {
-  getFirestore, doc, collection, setDoc, getDoc, getDocs, onSnapshot,
+  getFirestore, doc, collection, setDoc, deleteDoc, getDoc, getDocs, onSnapshot,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 import { firebaseConfig } from "../shared/firebase-config.js";
@@ -174,10 +174,10 @@ function showJoinError(msg) {
   if (el) el.textContent = msg;
 }
 
-async function submitAnswer(sel) {
+async function submitAnswer(sel, force = false) {
   if (hasAnswered) return;
   const selected = sel || mySelected;
-  if (selected.length === 0) return;
+  if (selected.length === 0 && !force) return;
   hasAnswered = true;
   lastIndexAnswered = sessionData.currentIndex;
   mySelected = selected;
@@ -188,7 +188,15 @@ async function submitAnswer(sel) {
   });
 }
 
-function leaveGame() {
+async function removePlayerDoc() {
+  if (!code || !playerId) return;
+  try {
+    await deleteDoc(doc(db, "sessions", code, "players", playerId));
+  } catch { /* se falhar (ex: sem internet), não trava a saída */ }
+}
+
+async function leaveGame() {
+  await removePlayerDoc();
   unsubSession && unsubSession();
   unsubScore && unsubScore();
   localStorage.removeItem("quiz-player");
@@ -200,6 +208,8 @@ function leaveGame() {
 // usado só depois que o jogo termina: em vez de voltar pra tela de
 // código (dentro do site do jogo), manda pra página inicial de verdade —
 // o jogo já acabou, não faz sentido oferecer "digitar outro código" aqui.
+// Não remove o registro do jogador aqui (diferente do leaveGame) porque
+// a busca de resultado por nome, depois do jogo, precisa dele.
 function goHome() {
   unsubSession && unsubSession();
   unsubScore && unsubScore();
@@ -406,11 +416,14 @@ function renderQuestion() {
   root.className = "container left";
 
   if (hasAnswered) {
+    const noAnswer = !mySelected || mySelected.length === 0;
     root.innerHTML = `
-      <div class="eyebrow">enviado ✓</div>
-      <h1 style="font-size:24px; margin-top:6px;">Resposta registrada!</h1>
+      <div class="eyebrow">${noAnswer ? "tempo esgotado ⏱️" : "enviado ✓"}</div>
+      <h1 style="font-size:24px; margin-top:6px;">${noAnswer ? "Não deu tempo..." : "Resposta registrada!"}</h1>
       <p style="color:var(--text-dim); margin-top:8px;">Aguardando o resto da turma...</p>
+      <button class="btn-link" id="leave-btn" style="margin-top:20px;">sair da sala</button>
     `;
+    document.getElementById("leave-btn").onclick = leaveGame;
     return;
   }
 
@@ -422,6 +435,7 @@ function renderQuestion() {
     <h2 style="font-size:19px; margin:10px 0 14px;">${escapeHtml(q.text)}</h2>
     <div style="display:flex; flex-direction:column; gap:10px;" id="options"></div>
     ${q.type === "multiple" ? `<button class="btn btn-primary btn-block" id="confirm-btn" style="margin-top:16px;" disabled>Confirmar resposta</button>` : ""}
+    <button class="btn-link" id="leave-btn" style="margin-top:16px; align-self:center;">sair da sala</button>
   `;
 
   const optsEl = document.getElementById("options");
@@ -445,6 +459,7 @@ function renderQuestion() {
     };
   });
   document.getElementById("confirm-btn")?.addEventListener("click", () => submitAnswer());
+  document.getElementById("leave-btn").onclick = leaveGame;
 
   const draw = () => {
     const elapsed = (Date.now() - (s.questionStartedAt || Date.now())) / 1000;
@@ -453,6 +468,10 @@ function renderQuestion() {
     const ring = document.getElementById("timer-ring");
     if (num) num.textContent = remaining;
     if (ring) ring.classList.toggle("low", remaining <= 5);
+    if (remaining <= 0 && !hasAnswered) {
+      clearInterval(liveTimerInt);
+      submitAnswer(mySelected, true);
+    }
   };
   draw();
   liveTimerInt = setInterval(draw, 250);
@@ -462,11 +481,12 @@ function renderReveal() {
   const s = sessionData;
   const q = s.questions[s.currentIndex];
   const correct = myScore?.lastCorrect;
+  const noAnswer = !mySelected || mySelected.length === 0;
   root.className = "container left";
   root.innerHTML = `
     <div style="text-align:center;">
-      <div class="big-emoji">${hasAnswered ? (correct ? "✅" : "❌") : "⏱️"}</div>
-      <h1 style="font-size:22px; margin-top:8px;">${hasAnswered ? (correct ? "Certinho!" : "Não foi dessa vez") : "Tempo esgotado"}</h1>
+      <div class="big-emoji">${correct ? "✅" : noAnswer ? "⏱️" : "❌"}</div>
+      <h1 style="font-size:22px; margin-top:8px;">${correct ? "Certinho!" : noAnswer ? "Tempo esgotado" : "Não foi dessa vez"}</h1>
       ${myScore ? `<div style="color:var(--gold); font-weight:700; margin-top:4px;">+${myScore.lastPoints} pontos</div>` : ""}
       ${myScore?.lastCombo >= 2 ? `<div style="color:var(--coral); font-weight:700; font-size:13px; margin-top:2px;">🔥 combo x${myScore.lastCombo}!</div>` : ""}
       <div style="color:var(--text-dim); margin:6px 0 18px;">Total: <b style="color:var(--text);">${myScore?.total ?? 0}</b> pontos</div>
@@ -486,7 +506,9 @@ function renderReveal() {
         `;
       }).join("")}
     </div>
+    <button class="btn-link" id="leave-btn" style="margin-top:16px; align-self:center;">sair da sala</button>
   `;
+  document.getElementById("leave-btn").onclick = leaveGame;
 }
 
 function renderLeaderboard() {
@@ -507,7 +529,9 @@ function renderLeaderboard() {
         </div>
       `).join("")}
     </div>
+    <button class="btn-link" id="leave-btn" style="margin-top:16px; align-self:center;">sair da sala</button>
   `;
+  document.getElementById("leave-btn").onclick = leaveGame;
 }
 
 function renderEnd() {

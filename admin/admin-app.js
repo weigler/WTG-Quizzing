@@ -826,7 +826,7 @@ function renderControl() {
 }
 
 function renderLobby() {
-  const players = Object.values(sessionPlayers);
+  const playerEntries = Object.entries(sessionPlayers);
   const joinUrl = new URL(`../jogo/index.html?code=${sessionCode}`, window.location.href).href;
   const qrImg = `https://api.qrserver.com/v1/create-qr-code/?size=220x220&margin=10&data=${encodeURIComponent(joinUrl)}`;
   root.innerHTML = `
@@ -844,12 +844,17 @@ function renderLobby() {
     </div>
 
     <div class="card" style="margin-top:20px;">
-      <div style="font-weight:700; margin-bottom:10px;">Jogadores (${players.length})</div>
+      <div style="font-weight:700; margin-bottom:10px;">Jogadores (${playerEntries.length})</div>
       <div class="player-pill-list">
-        ${players.map((p) => `<span class="pill" style="display:inline-flex; align-items:center; gap:6px;"><span class="mini-avatar">${avatarSVG(p.avatar, 24)}</span>${escapeHtml(p.name)}</span>`).join("") || `<span style="color:var(--text-dim); font-size:13px;">Aguardando entrarem...</span>`}
+        ${playerEntries.map(([id, p]) => `
+          <span class="pill" style="display:inline-flex; align-items:center; gap:6px;">
+            <span class="mini-avatar">${avatarSVG(p.avatar, 24)}</span>${escapeHtml(p.name)}
+            <button type="button" class="pill-remove" data-remove-player="${id}" title="remover">✕</button>
+          </span>
+        `).join("") || `<span style="color:var(--text-dim); font-size:13px;">Aguardando entrarem...</span>`}
       </div>
     </div>
-    <button class="btn btn-primary btn-block" id="begin-btn" style="margin-top:22px;" ${players.length === 0 ? "disabled" : ""}>Começar jogo →</button>
+    <button class="btn btn-primary btn-block" id="begin-btn" style="margin-top:22px;" ${playerEntries.length === 0 ? "disabled" : ""}>Começar jogo →</button>
     <button class="btn btn-ghost btn-block" id="cancel-session-btn" style="margin-top:10px;">Cancelar e excluir esta sala</button>
   `;
   document.getElementById("control-back").onclick = () => { view = "list"; unsubSession(); unsubPlayers(); render(); };
@@ -857,6 +862,13 @@ function renderLobby() {
   document.getElementById("cancel-session-btn").onclick = async () => {
     await deleteSession(sessionCode, { fromControl: true });
   };
+  root.querySelectorAll("[data-remove-player]").forEach((btn) => {
+    btn.onclick = async () => {
+      const id = btn.dataset.removePlayer;
+      const ok = await removePlayer(sessionCode, id, sessionPlayers[id]?.name || "jogador", sessionData.questions.length);
+      if (ok) { delete sessionPlayers[id]; renderLobby(); }
+    };
+  });
 
   const qrEl = document.getElementById("qr-canvas");
   qrEl.innerHTML = "";
@@ -1037,6 +1049,7 @@ function renderLeaderboard() {
           <span class="mini-avatar">${avatarSVG(p.avatar, 30)}</span>
           <span style="flex:1; font-weight:600;">${escapeHtml(p.name)}</span>
           <span style="color:var(--gold); font-weight:700;">${p.total}</span>
+          <button type="button" class="rank-remove" data-remove-player="${p.id}" title="remover jogador">✕</button>
         </div>
       `).join("")}
     </div>
@@ -1045,6 +1058,18 @@ function renderLeaderboard() {
     </button>
   `;
   document.getElementById("next-btn").onclick = nextQuestion;
+  root.querySelectorAll("[data-remove-player]").forEach((btn) => {
+    btn.onclick = async () => {
+      const id = btn.dataset.removePlayer;
+      const name = s.leaderboardTop.find((p) => p.id === id)?.name || "jogador";
+      const ok = await removePlayer(sessionCode, id, name, s.questions.length);
+      if (ok) {
+        delete sessionPlayers[id];
+        sessionData = { ...s, leaderboardTop: s.leaderboardTop.filter((p) => p.id !== id) };
+        renderLeaderboard();
+      }
+    };
+  });
 }
 
 async function nextQuestion() {
@@ -1074,6 +1099,7 @@ function renderEnded() {
           <span class="mini-avatar">${avatarSVG(p.avatar, 30)}</span>
           <span style="flex:1; font-weight:600;">${escapeHtml(p.name)}</span>
           <span style="color:var(--gold); font-weight:700;">${p.total}</span>
+          <button type="button" class="rank-remove" data-remove-player="${p.id}" title="remover jogador">✕</button>
         </div>
       `).join("")}
     </div>
@@ -1087,6 +1113,17 @@ function renderEnded() {
     view = "list";
     render();
   };
+  root.querySelectorAll("[data-remove-player]").forEach((btn) => {
+    btn.onclick = async () => {
+      const id = btn.dataset.removePlayer;
+      const name = s.finalLeaderboard.find((p) => p.id === id)?.name || "jogador";
+      const ok = await removePlayer(sessionCode, id, name, s.questions.length);
+      if (ok) {
+        sessionData = { ...s, finalLeaderboard: s.finalLeaderboard.filter((p) => p.id !== id) };
+        renderEnded();
+      }
+    };
+  });
 }
 
 /* ================= SESSÕES (HISTÓRICO) ================= */
@@ -1151,6 +1188,40 @@ function renderSessions() {
     };
     document.getElementById(`del-session-${s.code}`).onclick = () => deleteSession(s.code);
   });
+}
+
+// Remove um jogador de uma sessão por completo: registro, respostas e
+// pontuação — inclusive depois do jogo já ter acabado (aí também tira o
+// nome do placar final salvo). Usado tanto no lobby/durante o jogo quanto
+// no relatório de sessões já encerradas.
+async function removePlayer(code, playerId, playerName, questionCount) {
+  if (!confirm(`Remover "${playerName}" desta sessão? Isso apaga o registro, as respostas e a pontuação dela(e). Não pode ser desfeito.`)) return false;
+  try {
+    await deleteDoc(doc(db, "sessions", code, "players", playerId));
+    await deleteDoc(doc(db, "sessions", code, "scores", playerId)).catch(() => {});
+    const answerDeletes = [];
+    for (let idx = 0; idx < (questionCount || 0); idx++) {
+      answerDeletes.push(deleteDoc(doc(db, "sessions", code, "answers", `${idx}_${playerId}`)).catch(() => {}));
+    }
+    await Promise.all(answerDeletes);
+
+    const sessSnap = await getDoc(doc(db, "sessions", code));
+    if (sessSnap.exists()) {
+      const data = sessSnap.data();
+      const updates = {};
+      if (Array.isArray(data.finalLeaderboard) && data.finalLeaderboard.some((p) => p.id === playerId)) {
+        updates.finalLeaderboard = data.finalLeaderboard.filter((p) => p.id !== playerId);
+      }
+      if (Array.isArray(data.leaderboardTop) && data.leaderboardTop.some((p) => p.id === playerId)) {
+        updates.leaderboardTop = data.leaderboardTop.filter((p) => p.id !== playerId);
+      }
+      if (Object.keys(updates).length) await updateDoc(doc(db, "sessions", code), updates);
+    }
+    return true;
+  } catch (err) {
+    alert("Não consegui remover esse jogador agora. Tenta de novo.");
+    return false;
+  }
 }
 
 async function deleteSession(code, opts = {}) {
@@ -1263,6 +1334,7 @@ function renderReport() {
           <span class="mini-avatar">${avatarSVG(p.avatar, 30)}</span>
           <span style="flex:1; font-weight:600;">${escapeHtml(p.name)}</span>
           <span style="color:var(--gold); font-weight:700;">${p.total}</span>
+          <button type="button" class="rank-remove" data-remove-player="${p.playerId}" title="remover jogador">✕</button>
         </div>
       `).join("")}
     </div>
@@ -1288,6 +1360,14 @@ function renderReport() {
   document.getElementById("report-back").onclick = () => { view = "sessions"; render(); };
   document.getElementById("csv-btn").onclick = () => downloadReportCsv(r);
   document.getElementById("pdf-btn").onclick = () => downloadReportPdf(r);
+  root.querySelectorAll("[data-remove-player]").forEach((btn) => {
+    btn.onclick = async () => {
+      const id = btn.dataset.removePlayer;
+      const name = r.totals.find((p) => p.playerId === id)?.name || "jogador";
+      const ok = await removePlayer(r.code, id, name, r.perQuestion.length);
+      if (ok) openReport(r.code);
+    };
+  });
 }
 
 function downloadReportCsv(r) {
