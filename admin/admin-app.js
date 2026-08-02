@@ -13,7 +13,7 @@ import { avatarSVG } from "../shared/avatar.js";
 import { kahootPoints, questionMaxPoints } from "../shared/scoring.js";
 import { getJsPDF, addPdfHeader, addSectionTitle, AUTOTABLE_THEME } from "../shared/pdf-helpers.js";
 import { parseQuizText, IMPORT_TEMPLATE } from "../shared/import-parser.js";
-import { MUSIC_TRACKS, trackUrl, findTrack } from "../shared/music-tracks.js";
+import { SUGGESTED_SOURCES } from "../shared/music-tracks.js";
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
@@ -97,7 +97,7 @@ function emptyQuestion(timeLimit = 20) {
   return { id: rid(), text: "", type: "single", options: ["", ""], correct: [], timeLimit, pointsMultiplier: 1, imageUrl: null, imageCredit: null };
 }
 function emptyQuiz() {
-  return { id: null, title: "", theme: "", coverImage: null, coverCredit: null, defaultTimeLimit: 20, musicTrackId: null, questions: [] };
+  return { id: null, title: "", theme: "", coverImage: null, coverCredit: null, defaultTimeLimit: 20, musicUrl: null, questions: [] };
 }
 
 function subscribeQuizzes() {
@@ -213,7 +213,7 @@ async function duplicateQuiz(q) {
     coverImage: copy.coverImage || null,
     coverCredit: copy.coverCredit || null,
     defaultTimeLimit: copy.defaultTimeLimit || 20,
-    musicTrackId: copy.musicTrackId || null,
+    musicUrl: copy.musicUrl || null,
     questions: copy.questions,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
@@ -238,7 +238,7 @@ async function launchSession(quiz) {
     ownerId: currentUser.uid,
     status: "lobby",
     questions: quiz.questions,
-    musicTrackId: quiz.musicTrackId || null,
+    musicUrl: quiz.musicUrl || null,
     currentIndex: -1,
     questionStartedAt: null,
     createdAt: serverTimestamp(),
@@ -273,13 +273,18 @@ function renderEditor() {
       <button type="button" class="btn-link" id="apply-time-all" style="margin-left:auto;">aplicar a todas as perguntas já criadas</button>
     </div>
 
-    <div style="display:flex; align-items:center; gap:10px; margin-bottom:20px; flex-wrap:wrap;">
-      <label style="font-size:13px; color:var(--text-dim); white-space:nowrap;">Trilha sonora</label>
-      <select class="input" id="quiz-music" style="flex:1; min-width:200px;">
-        <option value="">nenhuma</option>
-        ${MUSIC_TRACKS.map((t) => `<option value="${t.id}" ${q.musicTrackId === t.id ? "selected" : ""}>${t.label}</option>`).join("")}
-      </select>
-      <button type="button" class="btn-link" id="music-preview-btn">▶ ouvir prévia</button>
+    <div style="margin-bottom:20px;">
+      <label style="font-size:13px; color:var(--text-dim);">Trilha sonora (opcional)</label>
+      <div style="display:flex; gap:8px; margin-top:6px;">
+        <input class="input" id="quiz-music" placeholder="Cole o link direto de um arquivo .mp3 ou .ogg" value="${escapeAttr(q.musicUrl || "")}" style="flex:1;" />
+        <button type="button" class="btn btn-ghost" id="music-test-btn" style="width:auto; padding:10px 16px; white-space:nowrap;">▶ testar</button>
+      </div>
+      <div id="music-test-result" style="font-size:12px; margin-top:6px;"></div>
+      <div style="font-size:11px; color:var(--text-dim); margin-top:6px;">
+        Sem música pronta? Sugestões de domínio público:
+        ${SUGGESTED_SOURCES.map((s) => `<a href="${s.url}" target="_blank" style="color:var(--gold); margin-left:4px;">${s.mood}</a>`).join(" ·")}
+        — abra o link, baixe uma faixa e hospede em algum lugar com link direto (ex: seu próprio repositório no GitHub).
+      </div>
     </div>
 
     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
@@ -313,8 +318,8 @@ function renderEditor() {
   document.getElementById("cover-pick-btn").onclick = () => openUnsplash("cover");
   document.getElementById("save-quiz-btn").onclick = saveQuiz;
   document.getElementById("open-import-btn").onclick = openImportModal;
-  document.getElementById("quiz-music").onchange = (e) => (q.musicTrackId = e.target.value || null);
-  document.getElementById("music-preview-btn").onclick = () => previewMusic(document.getElementById("quiz-music").value);
+  document.getElementById("quiz-music").oninput = (e) => (q.musicUrl = e.target.value.trim() || null);
+  document.getElementById("music-test-btn").onclick = () => testMusic(document.getElementById("quiz-music").value.trim());
 
   renderQuestionList();
   if (!questionDraft) questionDraft = emptyQuestion(q.defaultTimeLimit || 20);
@@ -561,7 +566,7 @@ async function saveQuiz() {
   if (!q.title.trim()) return (errEl.textContent = "Dê um título ao quiz.");
   if (q.questions.length === 0) return (errEl.textContent = "Adicione ao menos uma pergunta.");
   errEl.textContent = "";
-  const payload = { title: q.title.trim(), theme: q.theme.trim(), coverImage: q.coverImage, coverCredit: q.coverCredit, defaultTimeLimit: q.defaultTimeLimit || 20, musicTrackId: q.musicTrackId || null, questions: q.questions, updatedAt: serverTimestamp() };
+  const payload = { title: q.title.trim(), theme: q.theme.trim(), coverImage: q.coverImage, coverCredit: q.coverCredit, defaultTimeLimit: q.defaultTimeLimit || 20, musicUrl: q.musicUrl || null, questions: q.questions, updatedAt: serverTimestamp() };
   if (q.id) {
     await updateDoc(doc(db, "quizzes", q.id), payload);
   } else {
@@ -638,13 +643,22 @@ function renderImportPreview() {
 }
 
 /* ================= MÚSICA ================= */
-function previewMusic(trackId) {
+function testMusic(url) {
+  const resultEl = document.getElementById("music-test-result");
   if (previewAudioEl) { previewAudioEl.pause(); previewAudioEl = null; }
-  const track = findTrack(trackId);
-  if (!track) return;
-  previewAudioEl = new Audio(trackUrl(track.file));
+  if (!url) { resultEl.innerHTML = `<span style="color:var(--coral);">Cole um link primeiro.</span>`; return; }
+  resultEl.innerHTML = `<span style="color:var(--text-dim);">carregando...</span>`;
+  previewAudioEl = new Audio(url);
   previewAudioEl.volume = 0.5;
-  previewAudioEl.play().catch(() => alert("Não consegui tocar a prévia agora."));
+  previewAudioEl.addEventListener("canplaythrough", () => {
+    resultEl.innerHTML = `<span style="color:var(--green);">✓ tocando! esse link funciona.</span>`;
+  }, { once: true });
+  previewAudioEl.addEventListener("error", () => {
+    resultEl.innerHTML = `<span style="color:var(--coral);">✕ não consegui carregar esse link. Confira se é a URL direta do arquivo de áudio (termina em .mp3/.ogg), não a página do site.</span>`;
+  }, { once: true });
+  previewAudioEl.play().catch(() => {
+    resultEl.innerHTML = `<span style="color:var(--coral);">✕ o navegador bloqueou a reprodução ou o link não é um áudio válido.</span>`;
+  });
   setTimeout(() => { if (previewAudioEl) previewAudioEl.pause(); }, 8000);
 }
 
@@ -667,22 +681,20 @@ function ensureMusicUi() {
 
 function updateMusicForSession(s) {
   ensureMusicUi();
-  if (!s || s.status === "ended" || !s.musicTrackId) {
+  if (!s || s.status === "ended" || !s.musicUrl) {
     if (musicAudioEl) musicAudioEl.pause();
     musicToggleEl.style.display = "none";
     return;
   }
-  const track = findTrack(s.musicTrackId);
-  if (!track) { musicToggleEl.style.display = "none"; return; }
   if (!musicAudioEl) {
     musicAudioEl = document.createElement("audio");
     musicAudioEl.loop = true;
     musicAudioEl.volume = 0.32;
     document.body.appendChild(musicAudioEl);
   }
-  if (musicAudioEl.dataset.trackId !== s.musicTrackId) {
-    musicAudioEl.dataset.trackId = s.musicTrackId;
-    musicAudioEl.src = trackUrl(track.file);
+  if (musicAudioEl.dataset.url !== s.musicUrl) {
+    musicAudioEl.dataset.url = s.musicUrl;
+    musicAudioEl.src = s.musicUrl;
     if (!musicMuted) musicAudioEl.play().catch(() => {});
   }
   musicToggleEl.style.display = "block";

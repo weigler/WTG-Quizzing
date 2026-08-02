@@ -29,10 +29,11 @@ editor) podem ser duplicados com um clique — acelera montar variações ou
 perguntas parecidas.
 
 ### Trilha sonora
-Cada quiz pode ter uma música de fundo, escolhida entre 5 opções (alegre,
-suspense, tensão, vitória, leve) — todas de domínio público. Toca na tela
-de quem está controlando o jogo (não no celular de cada jogador, pra não
-virar uma bagunça de sons), com botão pra silenciar a qualquer momento.
+Cada quiz pode ter uma música de fundo — você cola o link direto de um
+arquivo de áudio (.mp3/.ogg) e testa na hora, antes de salvar, pra ter
+certeza que funciona. Toca na tela de quem está controlando o jogo (não
+no celular de cada jogador, pra não virar uma bagunça de sons), com botão
+pra silenciar a qualquer momento.
 
 ### Cadastro de quizzes
 Dá pra criar quantos quizzes quiser, com temas diferentes — um sobre um
