@@ -182,8 +182,8 @@ function quizCardHtml(q) {
     <div class="quiz-card">
       <div class="cover" style="${q.coverImage ? `background-image:url('${q.coverImage}')` : ""}"></div>
       <div class="body">
-        <div class="theme-tag">${escapeHtml(q.theme || "sem tema")}</div>
         <div class="title">${escapeHtml(q.title || "Sem título")}</div>
+        <div class="theme-tag">${escapeHtml(q.theme || "sem tema")}</div>
         <div class="meta">${(q.questions || []).length} pergunta${(q.questions || []).length !== 1 ? "s" : ""}</div>
         <div class="actions">
           <button class="btn btn-primary" id="open-${q.id}">Abrir sala</button>
