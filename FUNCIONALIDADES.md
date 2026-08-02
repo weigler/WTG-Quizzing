@@ -56,18 +56,32 @@ de quem está controlando o jogo (não no celular de cada jogador, pra não
 virar uma bagunça de sons), com botão pra silenciar a qualquer momento.
 
 ### Modos de jogo
-Além do modo clássico (pergunta → revelação → placar → próxima), o quiz
-pode ser configurado em:
+O quiz em si não define o modo — isso é escolhido na hora de **abrir a
+sala**, então o mesmo quiz pode virar jogos bem diferentes em ocasiões
+diferentes. As opções:
+
+- **Clássico** — pergunta → revelação → placar → próxima.
+- **Equipes** — jogadores escolhem um time ao entrar (você define os
+  nomes na hora de abrir a sala); o placar soma por equipe. Dois
+  submodos: **cada integrante responde** (todo mundo do time joga e os
+  pontos somam) ou **um aparelho só por equipe** (só uma pessoa por time
+  entra, representando o time inteiro — times já ocupados aparecem
+  travados pros outros).
 - **Sobrevivência** — quem responde errado é eliminado e vira espectador;
   o jogo segue até sobrar pouca gente (se todo mundo erraria junto,
   ninguém é eliminado naquela rodada, pra sempre sobrar alguém).
-- **Equipes** — jogadores escolhem um time ao entrar (nomes definidos por
-  você); o placar passa a somar por equipe em vez de individual.
 - **Cooperativo** — sem ranking individual: todo mundo soma pra um placar
-  coletivo único, sem competição entre os jogadores.
+  coletivo único. Dá pra definir uma **meta** opcional (em pontos fixos
+  ou em % do máximo possível daquele quiz) pra saber se o grupo "bateu a
+  meta" ao final.
 - **Corrida livre** — sem pausa pra revelação entre perguntas: cada
   jogador avança sozinho, no seu próprio ritmo, dentro de um tempo total
   compartilhado; o placar atualiza ao vivo pra quem está controlando.
+- **Blefe** — cada pergunta vira uma rodada de blefe: todo mundo escreve
+  a própria resposta falsa (mas convincente), depois todo mundo vota em
+  qual acha que é a verdadeira. Quem acerta a verdadeira ganha pontos;
+  quem engana os outros também — quanto mais gente cair no seu blefe,
+  mais pontos.
 
 ### Cadastro de quizzes
 Dá pra criar quantos quizzes quiser, com temas diferentes — um sobre um

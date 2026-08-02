@@ -1,11 +1,12 @@
 import { initializeApp } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-app.js";
 import {
-  getFirestore, doc, collection, setDoc, deleteDoc, getDoc, getDocs, onSnapshot,
+  getFirestore, doc, collection, setDoc, deleteDoc, getDoc, getDocs, query, where, onSnapshot,
 } from "https://www.gstatic.com/firebasejs/10.12.2/firebase-firestore.js";
 
 import { firebaseConfig } from "../shared/firebase-config.js";
 import { AVATAR_COLORS, SPECIES, SPECIES_LABEL, HATS, GLASSES, defaultAvatar, avatarSVG, avatarPngDataUrl } from "../shared/avatar.js";
 import { lateJoinAllowed, questionMaxPoints, scoreQuestionSequence } from "../shared/scoring.js";
+import { cooperativeProgress } from "../shared/game-modes.js";
 import { getJsPDF, addPdfHeader, addSectionTitle, AUTOTABLE_THEME } from "../shared/pdf-helpers.js";
 
 const app = initializeApp(firebaseConfig);
@@ -39,6 +40,13 @@ let raceIndex = 0;
 let raceSelected = [];
 let raceQuestionShownAt = 0;
 let raceFeedback = null;
+let bluffSubmitted = false;
+let voteSubmitted = false;
+let myBluffText = "";
+let bluffVoteOptions = null;
+let takenTeams = [];
+let readySubmitted = false;
+let readyPhaseKey = null;
 
 /* tenta retomar sessão salva no navegador (se a pessoa recarregar a página) —
    mas só se aquela sessão ainda existir e não tiver acabado; caso
@@ -48,6 +56,9 @@ function viewForStatus(status) {
   if (status === "reveal") return "reveal";
   if (status === "leaderboard") return "leaderboard";
   if (status === "racing") return "race";
+  if (status === "bluffwrite") return "bluffwrite";
+  if (status === "bluffvote") return "bluffvote";
+  if (status === "bluffreveal") return "bluffreveal";
   if (status === "ended") return "end";
   return "wait";
 }
@@ -158,6 +169,18 @@ function reactToStatus() {
     view = "race";
     return;
   }
+  if (s.status === "bluffwrite") {
+    if (s.currentIndex !== lastIndexAnswered) {
+      lastIndexAnswered = -2;
+      bluffSubmitted = false;
+      voteSubmitted = false;
+      myBluffText = "";
+    }
+    view = "bluffwrite";
+    return;
+  }
+  if (s.status === "bluffvote") { view = "bluffvote"; return; }
+  if (s.status === "bluffreveal") { view = "bluffreveal"; return; }
   if (s.status === "lobby") view = "wait";
 }
 
@@ -275,6 +298,129 @@ async function submitRaceAnswer(sel) {
   }, 900);
 }
 
+/* ---------------- modo blefe ---------------- */
+function renderBluffWrite() {
+  const s = sessionData;
+  const q = s.questions[s.currentIndex];
+  root.className = "container left";
+
+  if (bluffSubmitted) {
+    root.innerHTML = `
+      <div class="eyebrow">enviado ✓</div>
+      <h1 style="font-size:22px; margin-top:6px;">Blefe enviado!</h1>
+      <p style="color:var(--text-dim); margin-top:8px;">Aguardando o resto da turma escrever...</p>
+    `;
+    return;
+  }
+
+  root.innerHTML = `
+    <div class="eyebrow">blefe</div>
+    <h2 style="font-size:19px; margin:10px 0 6px;">${escapeHtml(q.text)}</h2>
+    <p style="color:var(--text-dim); font-size:13px; margin-bottom:12px;">Escreva uma resposta FALSA, mas convincente — o objetivo é enganar os outros.</p>
+    <input class="input" id="bluff-input" maxlength="80" placeholder="Sua resposta falsa..." />
+    <button class="btn btn-primary btn-block" id="bluff-submit-btn" style="margin-top:14px;">Enviar blefe →</button>
+  `;
+  document.getElementById("bluff-submit-btn").onclick = async () => {
+    const text = document.getElementById("bluff-input").value.trim();
+    if (!text) return;
+    myBluffText = text;
+    bluffSubmitted = true;
+    render();
+    await setDoc(doc(db, "sessions", code, "bluffs", `${s.currentIndex}_${playerId}`), {
+      playerId, questionIndex: s.currentIndex, text, submittedAt: Date.now(),
+    }).catch(() => { bluffSubmitted = false; render(); });
+  };
+}
+
+function renderBluffVote() {
+  const s = sessionData;
+  root.className = "container left";
+
+  if (voteSubmitted) {
+    root.innerHTML = `
+      <div class="eyebrow">voto enviado ✓</div>
+      <h1 style="font-size:22px; margin-top:6px;">Aguardando a revelação...</h1>
+    `;
+    return;
+  }
+
+  root.innerHTML = `<div class="eyebrow">blefe · votação</div><div class="spinner" style="margin-top:16px;"></div>`;
+
+  (async () => {
+    const q = s.questions[s.currentIndex];
+    const snap = await getDocs(query(collection(db, "sessions", code, "bluffs"), where("questionIndex", "==", s.currentIndex)));
+    const options = [{ key: "correct", label: q.options[q.correct[0]] }];
+    snap.forEach((d) => {
+      const data = d.data();
+      if (data.playerId !== playerId) options.push({ key: data.playerId, label: data.text });
+    });
+    bluffVoteOptions = shuffleForVote(options);
+    if (view !== "bluffvote") return; // já mudou de tela enquanto buscava
+    root.innerHTML = `
+      <div class="eyebrow">blefe · votação</div>
+      <h2 style="font-size:19px; margin:10px 0 14px;">Qual dessas é a resposta verdadeira?</h2>
+      <div style="display:flex; flex-direction:column; gap:10px;" id="vote-options"></div>
+    `;
+    const el = document.getElementById("vote-options");
+    el.innerHTML = bluffVoteOptions.map((o, i) => `
+      <button type="button" class="option-btn ${OPTION_COLORS[i % 6]}" data-key="${o.key}">
+        <span class="${OPTION_SHAPES[i % 6]}"></span><span>${escapeHtml(o.label)}</span>
+      </button>
+    `).join("");
+    el.querySelectorAll("button").forEach((btn) => {
+      btn.onclick = async () => {
+        const votedFor = btn.dataset.key;
+        voteSubmitted = true;
+        render();
+        await setDoc(doc(db, "sessions", code, "votes", `${s.currentIndex}_${playerId}`), {
+          playerId, questionIndex: s.currentIndex, votedFor, submittedAt: Date.now(),
+        }).catch(() => { voteSubmitted = false; render(); });
+      };
+    });
+  })();
+}
+
+function shuffleForVote(arr) {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+function renderBluffRevealPlayer() {
+  const s = sessionData;
+  const data = s.bluffRevealData || { correctText: "", bluffs: {}, voteCounts: {} };
+  root.className = "container left";
+  ensureReadyPhase(`${s.currentIndex}_bluffreveal`);
+  const rows = [
+    { label: data.correctText, isCorrect: true, votes: data.voteCounts.correct || 0, mine: false },
+    ...Object.entries(data.bluffs).map(([pid, text]) => ({
+      label: text, isCorrect: false, votes: data.voteCounts[pid] || 0, mine: pid === playerId,
+    })),
+  ];
+  root.innerHTML = `
+    <div style="text-align:center;">
+      <div class="big-emoji">${myScore?.lastCorrect ? "✅" : "❌"}</div>
+      <h1 style="font-size:20px; margin-top:8px;">${myScore?.lastCorrect ? "Você descobriu a verdade!" : "Não foi dessa vez"}</h1>
+      <div style="color:var(--gold); font-weight:700; margin-top:6px;">+${myScore?.lastPoints ?? 0} pontos</div>
+      ${myScore?.lastFoolCount ? `<div style="color:var(--coral); font-size:13px; margin-top:4px;">🎭 ${myScore.lastFoolCount} pessoa(s) caíram no seu blefe! +${myScore.lastFoolBonus}</div>` : ""}
+      <div style="color:var(--text-dim); margin:10px 0 16px;">Total: <b style="color:var(--text);">${myScore?.total ?? 0}</b> pontos</div>
+    </div>
+    <div style="display:flex; flex-direction:column; gap:10px;">
+      ${rows.map((r) => `
+        <div class="reveal-option ${r.isCorrect ? "reveal-correct" : "reveal-neutral"}">
+          <span style="flex:1;">${escapeHtml(r.label)} ${r.mine ? "<b>(seu blefe)</b>" : ""}</span>
+          <span class="reveal-tag">${r.votes} voto${r.votes !== 1 ? "s" : ""}</span>
+        </div>
+      `).join("")}
+    </div>
+    ${readyButtonHtml()}
+  `;
+  bindReadyButton("bluffreveal");
+}
+
 /* ---------------- ações ---------------- */
 
 async function goToAvatarStep(inputCode, inputName) {
@@ -384,6 +530,9 @@ function render() {
     }
     if (view === "question") return renderQuestion();
     if (view === "race") return renderRace();
+    if (view === "bluffwrite") return renderBluffWrite();
+    if (view === "bluffvote") return renderBluffVote();
+    if (view === "bluffreveal") return renderBluffRevealPlayer();
     if (view === "reveal") return renderReveal();
     if (view === "leaderboard") return renderLeaderboard();
     if (view === "end") return renderEnd();
@@ -565,22 +714,33 @@ function renderEliminated() {
 
 function renderTeamPicker() {
   const teams = joinSessionPreview?.teams || [];
+  const isDeviceMode = joinSessionPreview?.teamSubmode === "device";
   root.innerHTML = `
     <div class="eyebrow">escolha seu time</div>
     <h1 style="font-size:24px; margin-top:6px;">Você vai jogar por qual time?</h1>
-    <div style="display:flex; flex-direction:column; gap:10px; margin-top:20px;">
-      ${teams.map((t) => `
-        <button type="button" class="chip" data-team="${escapeHtml(t)}" style="padding:16px; font-size:15px; ${t === selectedTeam ? "border-color:var(--gold); color:var(--gold);" : ""}">🏳️ ${escapeHtml(t)}</button>
-      `).join("")}
+    ${isDeviceMode ? `<p style="color:var(--text-dim); font-size:13px; margin-top:6px;">Um aparelho só por equipe — times já ocupados aparecem apagados.</p>` : ""}
+    <div style="display:flex; flex-direction:column; gap:10px; margin-top:20px;" id="team-list">
+      ${teams.map((t) => {
+        const taken = isDeviceMode && takenTeams.includes(t);
+        return `<button type="button" class="chip" data-team="${escapeHtml(t)}" ${taken ? "disabled" : ""} style="padding:16px; font-size:15px; ${taken ? "opacity:.4;" : ""} ${t === selectedTeam ? "border-color:var(--gold); color:var(--gold);" : ""}">🏳️ ${escapeHtml(t)}${taken ? " (ocupado)" : ""}</button>`;
+      }).join("")}
     </div>
     <button class="btn btn-primary btn-block" id="team-confirm" style="margin-top:22px;">Entrar →</button>
     <button class="btn-link" id="team-back" style="margin-top:10px;">← voltar</button>
   `;
-  root.querySelectorAll("[data-team]").forEach((btn) => {
+  root.querySelectorAll("[data-team]:not(:disabled)").forEach((btn) => {
     btn.onclick = () => { selectedTeam = btn.dataset.team; renderTeamPicker(); };
   });
   document.getElementById("team-confirm").onclick = joinRoom;
   document.getElementById("team-back").onclick = () => { view = "avatar"; render(); };
+
+  if (isDeviceMode) {
+    getDocs(collection(db, "sessions", joinCodeValue, "players")).then((snap) => {
+      takenTeams = snap.docs.map((d) => d.data().team).filter(Boolean);
+      if (takenTeams.includes(selectedTeam)) selectedTeam = teams.find((t) => !takenTeams.includes(t)) || null;
+      if (view === "team") renderTeamPicker();
+    });
+  }
 }
 
 function hatLabel(h) { return { none: "nenhum", cap: "boné", crown: "coroa", party: "festa", headband: "faixa", bow: "laço", flower: "flores", wizard: "mago", cowboy: "cowboy" }[h]; }
@@ -681,11 +841,37 @@ function renderQuestion() {
   liveTimerInt = setInterval(draw, 250);
 }
 
+function ensureReadyPhase(phaseKey) {
+  if (readyPhaseKey !== phaseKey) {
+    readyPhaseKey = phaseKey;
+    readySubmitted = false;
+  }
+}
+
+async function submitReady(phase) {
+  if (readySubmitted) return;
+  readySubmitted = true;
+  render();
+  await setDoc(doc(db, "sessions", code, "ready", `${sessionData.currentIndex}_${phase}_${playerId}`), {
+    playerId, questionIndex: sessionData.currentIndex, phase, submittedAt: Date.now(),
+  }).catch(() => { readySubmitted = false; render(); });
+}
+
+function readyButtonHtml() {
+  return readySubmitted
+    ? `<div style="color:var(--text-dim); font-size:13px; margin-top:14px;">✓ Você continuou — aguardando o resto da turma...</div>`
+    : `<button class="btn btn-primary btn-block" id="ready-btn" style="margin-top:14px;">Continuar →</button>`;
+}
+function bindReadyButton(phase) {
+  document.getElementById("ready-btn")?.addEventListener("click", () => submitReady(phase));
+}
+
 function renderReveal() {
   const s = sessionData;
   const q = s.questions[s.currentIndex];
   const correct = myScore?.lastCorrect;
   const noAnswer = !mySelected || mySelected.length === 0;
+  ensureReadyPhase(`${s.currentIndex}_reveal`);
   root.className = "container left";
   root.innerHTML = `
     <div style="text-align:center;">
@@ -710,11 +896,13 @@ function renderReveal() {
         `;
       }).join("")}
     </div>
+    ${readyButtonHtml()}
     <div style="display:flex; gap:16px; margin-top:16px; align-self:center;">
       <button class="btn-link" id="refresh-btn">🔄 atualizar</button>
       <button class="btn-link" id="leave-btn">sair da sala</button>
     </div>
   `;
+  bindReadyButton("reveal");
   document.getElementById("leave-btn").onclick = leaveGame;
   document.getElementById("refresh-btn").onclick = () => window.location.reload();
 }
@@ -723,10 +911,22 @@ function renderLeaderboard() {
   const s = sessionData;
   const list = s.leaderboardTop || [];
   const myRank = list.findIndex((p) => p.id === playerId || (myTeam && p.id === myTeam));
+  const progress = s.gameMode === "cooperativo" ? cooperativeProgress(s, list[0]?.total || 0) : null;
+  ensureReadyPhase(`${s.currentIndex}_leaderboard`);
   root.className = "container left";
   root.innerHTML = `
     <div class="eyebrow" style="text-align:center;">placar</div>
-    <h1 style="font-size:22px; text-align:center; margin-top:6px;">${myRank >= 0 ? `Você está em ${myRank + 1}º` : "Aguardando..."}</h1>
+    <h1 style="font-size:22px; text-align:center; margin-top:6px;">${s.gameMode === "cooperativo" ? "Placar coletivo" : myRank >= 0 ? `Você está em ${myRank + 1}º` : "Aguardando..."}</h1>
+    ${progress ? `
+      <div style="margin-top:12px;">
+        <div style="display:flex; justify-content:space-between; font-size:12px; color:var(--text-dim); margin-bottom:4px;">
+          <span>Meta: ${progress.goalPoints} pts</span><span>${progress.pct}%${progress.met ? " ✓ batida!" : ""}</span>
+        </div>
+        <div style="background:var(--surface); border:1px solid var(--surface-line); border-radius:8px; height:14px; overflow:hidden;">
+          <div style="width:${progress.pct}%; height:100%; background:${progress.met ? "var(--green)" : "var(--gold)"};"></div>
+        </div>
+      </div>
+    ` : ""}
     <div style="margin-top:16px;">
       ${list.map((p, i) => `
         <div class="rank-row ${(p.id === playerId || (myTeam && p.id === myTeam)) ? "me" : ""}">
@@ -737,6 +937,7 @@ function renderLeaderboard() {
         </div>
       `).join("")}
     </div>
+    ${readyButtonHtml()}
     <div style="display:flex; gap:16px; margin-top:16px; align-self:center;">
       <button class="btn-link" id="refresh-btn">🔄 atualizar</button>
       <button class="btn-link" id="leave-btn">sair da sala</button>
@@ -744,15 +945,18 @@ function renderLeaderboard() {
   `;
   document.getElementById("leave-btn").onclick = leaveGame;
   document.getElementById("refresh-btn").onclick = () => window.location.reload();
+  bindReadyButton("leaderboard");
 }
 
 function renderEnd() {
   const s = sessionData;
   const final = s.finalLeaderboard || [];
   const myRank = final.findIndex((p) => p.id === playerId || (myTeam && p.id === myTeam));
+  const progress = s.gameMode === "cooperativo" ? cooperativeProgress(s, final[0]?.total || 0) : null;
   root.innerHTML = `
     <div class="big-emoji">🏁</div>
     <h1 style="font-size:24px; margin-top:10px;">Fim de jogo!</h1>
+    ${progress ? `<div style="color:${progress.met ? "var(--green)" : "var(--text-dim)"}; font-weight:700; margin-top:8px; font-size:14px;">${progress.met ? "🎉 Meta batida!" : "Meta não batida"} — ${final[0]?.total || 0} / ${progress.goalPoints} pts (${progress.pct}%)</div>` : ""}
     ${myRank >= 0 ? `<p style="color:var(--text-dim); margin-top:6px;">Você terminou em <b style="color:var(--gold);">${myRank + 1}º lugar</b> com ${final[myRank].total} pontos</p>` : ""}
     <button class="btn btn-primary btn-block" id="pdf-btn" style="margin-top:22px;">Baixar meu resultado em PDF</button>
     <button class="btn btn-ghost btn-block" id="leave-btn" style="margin-top:10px;">Voltar ao início</button>
@@ -770,38 +974,70 @@ async function downloadMyReportPdf() {
   if (btn) { btn.disabled = true; btn.textContent = "Gerando PDF..."; }
 
   try {
-    const snaps = await Promise.all(
-      s.questions.map((_, idx) => getDoc(doc(db, "sessions", code, "answers", `${idx}_${playerId}`)))
-    );
-
-    const items = s.questions.map((q, idx) => {
-      const snap = snaps[idx];
-      if (!snap.exists()) return { correct: false, timeMs: null, timeLimit: q.timeLimit, multiplier: q.pointsMultiplier || 1, ans: null };
-      const ans = snap.data();
-      const sel = [...(ans.selected || [])].sort().join(",");
-      const cor = [...(q.correct || [])].sort().join(",");
-      const correct = sel === cor && sel !== "";
-      return { correct, timeMs: ans.timeMs, timeLimit: q.timeLimit, multiplier: q.pointsMultiplier || 1, ans };
-    });
-    const scored = scoreQuestionSequence(items, !!s.precisionMode, !!s.comboMode);
-
-    const rows = s.questions.map((q, idx) => {
-      const item = items[idx];
-      const sc = scored[idx];
-      if (!item.ans) return [q.text, "não respondeu", "—", "não", "—", "0"];
-      return [
-        q.text,
-        (item.ans.selected || []).map((i) => q.options[i]).join(", "),
-        `${((item.timeMs || 0) / 1000).toFixed(1)}s`,
-        item.correct ? "sim" : "não",
-        sc.combo >= 2 ? `x${sc.combo} (+${sc.bonus})` : "—",
-        item.correct ? `+${sc.points}` : "0",
-      ];
-    });
-
     const final = s.finalLeaderboard || [];
     const myRank = final.findIndex((p) => p.id === playerId || (myTeam && p.id === myTeam));
     const total = myRank >= 0 ? final[myRank].total : (myScore?.total ?? 0);
+    let rows;
+
+    if (s.gameMode === "blefe") {
+      const bluffsSnap = await getDocs(collection(db, "sessions", code, "bluffs"));
+      const votesSnap = await getDocs(collection(db, "sessions", code, "votes"));
+      const bluffsByQ = {};
+      bluffsSnap.forEach((d) => { const data = d.data(); (bluffsByQ[data.questionIndex] ||= {})[data.playerId] = data.text; });
+      const votesByQ = {};
+      votesSnap.forEach((d) => { const data = d.data(); (votesByQ[data.questionIndex] ||= []).push(data); });
+
+      rows = s.questions.map((q, idx) => {
+        const bluffs = bluffsByQ[idx] || {};
+        const votes = votesByQ[idx] || [];
+        const voteCounts = {};
+        votes.forEach((v) => { voteCounts[v.votedFor] = (voteCounts[v.votedFor] || 0) + 1; });
+        const correctText = q.options[q.correct[0]];
+        const myVote = votes.find((v) => v.playerId === playerId);
+        const guessedRight = !!myVote && myVote.votedFor === "correct";
+        const foolCount = voteCounts[playerId] || 0;
+        const bonus = foolCount * 250;
+        const points = (guessedRight ? 500 : 0) + bonus;
+        const votedLabel = myVote ? (myVote.votedFor === "correct" ? correctText : (bluffs[myVote.votedFor] || "?")) : "não votou";
+        return [
+          q.text,
+          `votou: ${votedLabel}`,
+          "—",
+          guessedRight ? "sim" : "não",
+          foolCount ? `enganou ${foolCount}` : "—",
+          `${points}`,
+        ];
+      });
+    } else {
+      const snaps = await Promise.all(
+        s.questions.map((_, idx) => getDoc(doc(db, "sessions", code, "answers", `${idx}_${playerId}`)))
+      );
+
+      const items = s.questions.map((q, idx) => {
+        const snap = snaps[idx];
+        if (!snap.exists()) return { correct: false, timeMs: null, timeLimit: q.timeLimit, multiplier: q.pointsMultiplier || 1, ans: null };
+        const ans = snap.data();
+        const sel = [...(ans.selected || [])].sort().join(",");
+        const cor = [...(q.correct || [])].sort().join(",");
+        const correct = sel === cor && sel !== "";
+        return { correct, timeMs: ans.timeMs, timeLimit: q.timeLimit, multiplier: q.pointsMultiplier || 1, ans };
+      });
+      const scored = scoreQuestionSequence(items, !!s.precisionMode, !!s.comboMode);
+
+      rows = s.questions.map((q, idx) => {
+        const item = items[idx];
+        const sc = scored[idx];
+        if (!item.ans) return [q.text, "não respondeu", "—", "não", "—", "0"];
+        return [
+          q.text,
+          (item.ans.selected || []).map((i) => q.options[i]).join(", "),
+          `${((item.timeMs || 0) / 1000).toFixed(1)}s`,
+          item.correct ? "sim" : "não",
+          sc.combo >= 2 ? `x${sc.combo} (+${sc.bonus})` : "—",
+          item.correct ? `+${sc.points}` : "0",
+        ];
+      });
+    }
 
     const doc_ = new jsPDF();
     let y = addPdfHeader(doc_, { eyebrow: "meu resultado", title: s.title, subtitle: playerName });
@@ -822,7 +1058,9 @@ async function downloadMyReportPdf() {
     y = addSectionTitle(doc_, "Pergunta a pergunta", y);
     doc_.autoTable({
       startY: y,
-      head: [["Pergunta", "Sua resposta", "Tempo", "Certo?", "Combo", "Pontos"]],
+      head: s.gameMode === "blefe"
+        ? [["Pergunta", "Seu voto", "Tempo", "Acertou?", "Enganou", "Pontos"]]
+        : [["Pergunta", "Sua resposta", "Tempo", "Certo?", "Combo", "Pontos"]],
       body: rows,
       columnStyles: { 0: { cellWidth: 60 } },
       ...AUTOTABLE_THEME,

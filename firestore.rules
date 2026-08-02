@@ -63,6 +63,40 @@ service cloud.firestore {
                          && get(/databases/$(database)/documents/sessions/$(code)).data.ownerId == request.auth.uid)
                      || get(/databases/$(database)/documents/sessions/$(code)).data.gameMode == "corrida";
       }
+
+      match /bluffs/{bluffId} {
+        // Modo Blefe: todo mundo precisa VER os blefes de todo mundo na
+        // hora de votar (isso é o próprio mecanismo do jogo, não uma
+        // brecha) — por isso leitura é pública, tanto get quanto list.
+        allow read: if true;
+        allow create: if true;
+        allow update: if false;
+        allow delete: if request.auth != null
+                      && get(/databases/$(database)/documents/sessions/$(code)).data.ownerId == request.auth.uid;
+      }
+
+      match /votes/{voteId} {
+        // igual os blefes: quem vota precisa ver quantos votos cada
+        // resposta recebeu (é o próprio mecanismo do jogo), e cada
+        // jogador precisa disso pra montar o próprio relatório/PDF
+        // pessoal depois — por isso leitura é pública.
+        allow read: if true;
+        allow create: if true;
+        allow update: if false;
+        allow delete: if request.auth != null
+                      && get(/databases/$(database)/documents/sessions/$(code)).data.ownerId == request.auth.uid;
+      }
+
+      match /ready/{readyId} {
+        // botão "Continuar": cada jogador avisa que já viu a revelação ou
+        // o placar. Leitura pública (o dono precisa contar quantos estão
+        // prontos), qualquer um marca o próprio "pronto".
+        allow read: if true;
+        allow create: if true;
+        allow update: if false;
+        allow delete: if request.auth != null
+                      && get(/databases/$(database)/documents/sessions/$(code)).data.ownerId == request.auth.uid;
+      }
     }
   }
 }

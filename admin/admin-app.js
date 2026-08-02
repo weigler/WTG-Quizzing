@@ -14,7 +14,7 @@ import { questionMaxPoints, nextQuestionScore, scoreQuestionSequence } from "../
 import { getJsPDF, addPdfHeader, addSectionTitle, AUTOTABLE_THEME } from "../shared/pdf-helpers.js";
 import { parseQuizText, IMPORT_TEMPLATE } from "../shared/import-parser.js";
 import { MUSIC_TRACKS, findTrack, SUGGESTED_SOURCES } from "../shared/music-tracks.js";
-import { buildLeaderboardRows, GAME_MODES } from "../shared/game-modes.js";
+import { buildLeaderboardRows, GAME_MODES, TEAM_SUBMODES, GOAL_TYPES, cooperativeProgress, cooperativeMaxPoints } from "../shared/game-modes.js";
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
@@ -117,7 +117,7 @@ function emptyQuestion(timeLimit = 20, image = null) {
   return { id: rid(), text: "", type: "single", options: ["", ""], correct: [], timeLimit, pointsMultiplier: 1, imageUrl: image?.url || null, imageCredit: image?.credit || null };
 }
 function emptyQuiz() {
-  return { id: null, title: "", theme: "", coverImage: null, coverCredit: null, defaultTimeLimit: 20, musicUrl: null, precisionMode: false, comboMode: false, shuffleQuestions: false, shuffleAnswers: false, gameMode: "classico", teamMode: false, teams: ["Time Azul", "Time Vermelho"], questions: [] };
+  return { id: null, title: "", theme: "", coverImage: null, coverCredit: null, defaultTimeLimit: 20, musicUrl: null, precisionMode: false, comboMode: false, shuffleQuestions: false, shuffleAnswers: false, questions: [] };
 }
 
 function subscribeQuizzes() {
@@ -142,6 +142,7 @@ function render() {
     updateMusicForSession(view === "control" ? sessionData : null);
     if (view === "list") return renderList();
     if (view === "editor") return renderEditor();
+    if (view === "launch") return renderLaunchConfig();
     if (view === "control") return renderControl();
     if (view === "sessions") return renderSessions();
     if (view === "report") return renderReport();
@@ -186,7 +187,7 @@ function renderList() {
   document.getElementById("new-quiz-btn").onclick = () => { quizDraft = emptyQuiz(); view = "editor"; render(); };
   quizzes.forEach((q) => {
     document.getElementById(`edit-${q.id}`)?.addEventListener("click", () => { quizDraft = JSON.parse(JSON.stringify(q)); view = "editor"; render(); });
-    document.getElementById(`open-${q.id}`)?.addEventListener("click", () => launchSession(q));
+    document.getElementById(`open-${q.id}`)?.addEventListener("click", () => openLaunchConfig(q));
     document.getElementById(`dup-${q.id}`)?.addEventListener("click", () => duplicateQuiz(q));
     document.getElementById(`del-${q.id}`)?.addEventListener("click", () => deleteQuiz(q));
   });
@@ -237,9 +238,6 @@ async function duplicateQuiz(q) {
     precisionMode: !!copy.precisionMode,
     comboMode: !!copy.comboMode,
     shuffleQuestions: !!copy.shuffleQuestions,
-    gameMode: copy.gameMode || "classico",
-    teamMode: !!copy.teamMode,
-    teams: copy.teams || [],
     shuffleAnswers: !!copy.shuffleAnswers,
     questions: copy.questions,
     createdAt: serverTimestamp(),
@@ -251,7 +249,26 @@ async function duplicateQuiz(q) {
   render();
 }
 
-async function launchSession(quiz) {
+let launchQuiz = null;
+let launchConfig = null;
+
+function defaultLaunchConfig() {
+  return {
+    gameMode: "classico",
+    teamSubmode: "individual",
+    teams: ["Time Azul", "Time Vermelho"],
+    cooperativeGoal: { type: "none", value: 0 },
+  };
+}
+
+function openLaunchConfig(quiz) {
+  launchQuiz = quiz;
+  launchConfig = defaultLaunchConfig();
+  view = "launch";
+  render();
+}
+
+async function launchSession(quiz, config) {
   let code = genCode();
   // evita colisão de código (raro, mas confere)
   let existing = await getDoc(doc(db, "sessions", code));
@@ -262,6 +279,8 @@ async function launchSession(quiz) {
   let questions = JSON.parse(JSON.stringify(quiz.questions));
   if (quiz.shuffleQuestions) questions = shuffleArray(questions);
   if (quiz.shuffleAnswers) questions = questions.map(shuffleQuestionOptions);
+  const gameMode = config.gameMode || "classico";
+  const isTeams = gameMode === "equipes";
   const session = {
     quizId: quiz.id,
     title: quiz.title,
@@ -271,9 +290,11 @@ async function launchSession(quiz) {
     musicUrl: quiz.musicUrl || null,
     precisionMode: !!quiz.precisionMode,
     comboMode: !!quiz.comboMode,
-    gameMode: quiz.gameMode || "classico",
-    teamMode: !!quiz.teamMode && quiz.gameMode !== "cooperativo" && quiz.gameMode !== "corrida",
-    teams: quiz.teams || [],
+    gameMode,
+    teamMode: isTeams,
+    teamSubmode: isTeams ? (config.teamSubmode || "individual") : null,
+    teams: isTeams ? (config.teams || []).filter((t) => t.trim()) : [],
+    cooperativeGoal: gameMode === "cooperativo" ? config.cooperativeGoal : null,
     eliminatedPlayerIds: [],
     raceDurationSec: questions.reduce((sum, q) => sum + (q.timeLimit || 20), 0),
     raceStartedAt: null,
@@ -285,6 +306,85 @@ async function launchSession(quiz) {
   };
   await setDoc(doc(db, "sessions", code), session);
   openControl(code);
+}
+
+/* ================= CONFIGURAÇÃO AO ABRIR SALA ================= */
+const GAME_MODE_HINTS = {
+  classico: "Ritmo normal: pergunta, revelação, placar, próxima.",
+  equipes: "Jogadores entram escolhendo um time; o placar soma por equipe.",
+  sobrevivencia: "Quem responde errado é eliminado e vira espectador — o jogo segue até sobrar pouca gente. Se todo mundo erraria na mesma rodada, ninguém é eliminado dessa vez.",
+  cooperativo: "Não tem ranking individual — todo mundo soma pra um placar coletivo só.",
+  corrida: "Sem revelação entre perguntas: cada jogador responde a próxima pergunta assim que termina a atual, no seu próprio ritmo, até o tempo total acabar.",
+  blefe: "Cada pergunta vira uma rodada de blefe: todo mundo escreve uma resposta falsa convincente, depois vota em qual acha que é a verdadeira. Pontua quem acerta e quem engana os outros.",
+};
+
+function renderLaunchConfig() {
+  const c = launchConfig;
+  root.innerHTML = `
+    <button class="btn-link" id="launch-back">← voltar</button>
+    <div class="eyebrow" style="margin-top:10px;">abrir sala</div>
+    <h1 style="font-size:22px; margin-top:4px;">${escapeHtml(launchQuiz.title)}</h1>
+
+    <div style="margin-top:18px;">
+      <label style="font-size:13px; color:var(--text-dim);">Modo de jogo</label>
+      <select class="input" id="launch-mode" style="margin-top:6px;">
+        ${GAME_MODES.map((m) => `<option value="${m.id}" ${c.gameMode === m.id ? "selected" : ""}>${m.label}</option>`).join("")}
+      </select>
+      <div style="font-size:11px; color:var(--text-dim); margin-top:6px;">${GAME_MODE_HINTS[c.gameMode] || ""}</div>
+    </div>
+
+    <div id="launch-teams-config" style="display:${c.gameMode === "equipes" ? "block" : "none"}; margin-top:16px;">
+      <label style="font-size:13px; color:var(--text-dim);">Como o time responde</label>
+      <select class="input" id="launch-team-submode" style="margin-top:6px; margin-bottom:12px;">
+        ${TEAM_SUBMODES.map((m) => `<option value="${m.id}" ${c.teamSubmode === m.id ? "selected" : ""}>${m.label}</option>`).join("")}
+      </select>
+      <label style="font-size:13px; color:var(--text-dim);">Times</label>
+      <div id="launch-team-names" style="display:flex; flex-direction:column; gap:6px; margin-top:6px;">
+        ${c.teams.map((t, i) => `
+          <div style="display:flex; gap:6px;">
+            <input class="input" data-team="${i}" value="${escapeAttr(t)}" maxlength="24" placeholder="Nome do time" style="flex:1;" />
+            ${c.teams.length > 2 ? `<button type="button" class="btn-link" data-team-remove="${i}">✕</button>` : ""}
+          </div>
+        `).join("")}
+        ${c.teams.length < 6 ? `<button type="button" class="btn-link" id="launch-team-add" style="align-self:flex-start;">+ adicionar time</button>` : ""}
+      </div>
+    </div>
+
+    <div id="launch-coop-config" style="display:${c.gameMode === "cooperativo" ? "block" : "none"}; margin-top:16px;">
+      <label style="font-size:13px; color:var(--text-dim);">Meta do grupo (opcional)</label>
+      <div style="display:flex; gap:8px; margin-top:6px;">
+        <select class="input" id="launch-goal-type" style="flex:1;">
+          ${GOAL_TYPES.map((g) => `<option value="${g.id}" ${c.cooperativeGoal.type === g.id ? "selected" : ""}>${g.label}</option>`).join("")}
+        </select>
+        <input class="input" type="number" min="0" id="launch-goal-value" value="${c.cooperativeGoal.value || ""}" placeholder="${c.cooperativeGoal.type === "percent" ? "% ex: 80" : "pontos ex: 5000"}" style="width:120px; display:${c.cooperativeGoal.type === "none" ? "none" : "block"};" />
+      </div>
+      <div style="font-size:11px; color:var(--text-dim); margin-top:6px;">Máximo possível deste quiz: ${cooperativeMaxPoints(launchQuiz.questions)} pontos.</div>
+    </div>
+
+    <button class="btn btn-success btn-block" id="launch-confirm" style="margin-top:24px;">Abrir sala →</button>
+  `;
+
+  document.getElementById("launch-back").onclick = () => { view = "list"; render(); };
+  document.getElementById("launch-mode").onchange = (e) => { c.gameMode = e.target.value; renderLaunchConfig(); };
+  document.getElementById("launch-team-submode")?.addEventListener("change", (e) => (c.teamSubmode = e.target.value));
+  document.querySelectorAll("[data-team]").forEach((input) => {
+    input.oninput = (e) => { c.teams[Number(input.dataset.team)] = e.target.value; };
+  });
+  document.querySelectorAll("[data-team-remove]").forEach((btn) => {
+    btn.onclick = () => { c.teams.splice(Number(btn.dataset.teamRemove), 1); renderLaunchConfig(); };
+  });
+  document.getElementById("launch-team-add")?.addEventListener("click", () => {
+    c.teams.push(`Time ${c.teams.length + 1}`);
+    renderLaunchConfig();
+  });
+  document.getElementById("launch-goal-type")?.addEventListener("change", (e) => {
+    c.cooperativeGoal.type = e.target.value;
+    renderLaunchConfig();
+  });
+  document.getElementById("launch-goal-value")?.addEventListener("input", (e) => {
+    c.cooperativeGoal.value = Number(e.target.value) || 0;
+  });
+  document.getElementById("launch-confirm").onclick = () => launchSession(launchQuiz, c);
 }
 
 /* ================= EDITOR DE QUIZ ================= */
@@ -348,30 +448,6 @@ function renderEditor() {
       <span><b style="color:var(--text);">Embaralhar respostas</b> — sorteia a ordem das opções de cada pergunta toda vez que a sala é aberta</span>
     </label>
 
-    <div style="margin-bottom:14px;">
-      <label style="font-size:13px; color:var(--text-dim);">Modo de jogo</label>
-      <select class="input" id="quiz-gamemode" style="margin-top:6px;">
-        ${GAME_MODES.map((m) => `<option value="${m.id}" ${q.gameMode === m.id ? "selected" : ""}>${m.label}</option>`).join("")}
-      </select>
-      <div style="font-size:11px; color:var(--text-dim); margin-top:6px;" id="gamemode-hint"></div>
-    </div>
-
-    <div id="team-config" style="display:${q.gameMode === "cooperativo" || q.gameMode === "corrida" ? "none" : "block"}; margin-bottom:20px;">
-      <label style="display:flex; align-items:center; gap:8px; margin-bottom:8px; font-size:13px; color:var(--text-dim); cursor:pointer;">
-        <input type="checkbox" id="quiz-teammode" ${q.teamMode ? "checked" : ""} />
-        <span><b style="color:var(--text);">Modo Equipes</b> — jogadores escolhem um time ao entrar, placar soma por equipe</span>
-      </label>
-      <div id="team-names" style="display:${q.teamMode ? "flex" : "none"}; flex-direction:column; gap:6px; margin-left:26px;">
-        ${(q.teams || []).map((t, i) => `
-          <div style="display:flex; gap:6px;">
-            <input class="input" data-team="${i}" value="${escapeAttr(t)}" maxlength="24" placeholder="Nome do time" style="flex:1;" />
-            ${(q.teams || []).length > 2 ? `<button type="button" class="btn-link" data-team-remove="${i}">✕</button>` : ""}
-          </div>
-        `).join("")}
-        ${(q.teams || []).length < 6 ? `<button type="button" class="btn-link" id="team-add" style="align-self:flex-start;">+ adicionar time</button>` : ""}
-      </div>
-    </div>
-
     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
       <div style="font-weight:700; font-family:var(--font-display);">Perguntas</div>
       <button type="button" class="btn btn-ghost" id="open-import-btn" style="width:auto; padding:8px 14px; font-size:13px;">Importar perguntas</button>
@@ -422,34 +498,6 @@ function renderEditor() {
   document.getElementById("quiz-combo").onchange = (e) => (q.comboMode = e.target.checked);
   document.getElementById("quiz-shuffle-questions").onchange = (e) => (q.shuffleQuestions = e.target.checked);
   document.getElementById("quiz-shuffle-answers").onchange = (e) => (q.shuffleAnswers = e.target.checked);
-
-  const gamemodeHints = {
-    classico: "Ritmo normal: pergunta, revelação, placar, próxima.",
-    sobrevivencia: "Quem responde errado é eliminado e vira espectador — o jogo segue até sobrar pouca gente. Se todo mundo erraria na mesma rodada, ninguém é eliminado dessa vez.",
-    cooperativo: "Não tem ranking individual — todo mundo soma pra um placar coletivo só.",
-    corrida: "Sem revelação entre perguntas: cada jogador responde a próxima pergunta assim que termina a atual, no seu próprio ritmo, até o tempo total acabar.",
-  };
-  const updateGamemodeHint = () => { document.getElementById("gamemode-hint").textContent = gamemodeHints[q.gameMode] || ""; };
-  updateGamemodeHint();
-  document.getElementById("quiz-gamemode").onchange = (e) => {
-    q.gameMode = e.target.value;
-    if (q.gameMode === "cooperativo" || q.gameMode === "corrida") q.teamMode = false;
-    renderEditor();
-  };
-  document.getElementById("quiz-teammode")?.addEventListener("change", (e) => {
-    q.teamMode = e.target.checked;
-    document.getElementById("team-names").style.display = q.teamMode ? "flex" : "none";
-  });
-  document.querySelectorAll("[data-team]").forEach((input) => {
-    input.oninput = (e) => { q.teams[Number(input.dataset.team)] = e.target.value; };
-  });
-  document.querySelectorAll("[data-team-remove]").forEach((btn) => {
-    btn.onclick = () => { q.teams.splice(Number(btn.dataset.teamRemove), 1); renderEditor(); };
-  });
-  document.getElementById("team-add")?.addEventListener("click", () => {
-    q.teams.push(`Time ${q.teams.length + 1}`);
-    renderEditor();
-  });
 
   renderQuestionList();
   if (!questionDraft) questionDraft = emptyQuestion(q.defaultTimeLimit || 20, quizDraft.defaultQuestionImage);
@@ -704,7 +752,7 @@ async function saveQuiz() {
   if (!q.title.trim()) return (errEl.textContent = "Dê um título ao quiz.");
   if (q.questions.length === 0) return (errEl.textContent = "Adicione ao menos uma pergunta.");
   errEl.textContent = "";
-  const payload = { title: q.title.trim(), theme: q.theme.trim(), coverImage: q.coverImage, coverCredit: q.coverCredit, defaultTimeLimit: q.defaultTimeLimit || 20, musicUrl: q.musicUrl || null, precisionMode: !!q.precisionMode, comboMode: !!q.comboMode, shuffleQuestions: !!q.shuffleQuestions, shuffleAnswers: !!q.shuffleAnswers, gameMode: q.gameMode || "classico", teamMode: !!q.teamMode, teams: q.teams || [], questions: q.questions, updatedAt: serverTimestamp() };
+  const payload = { title: q.title.trim(), theme: q.theme.trim(), coverImage: q.coverImage, coverCredit: q.coverCredit, defaultTimeLimit: q.defaultTimeLimit || 20, musicUrl: q.musicUrl || null, precisionMode: !!q.precisionMode, comboMode: !!q.comboMode, shuffleQuestions: !!q.shuffleQuestions, shuffleAnswers: !!q.shuffleAnswers, questions: q.questions, updatedAt: serverTimestamp() };
   if (q.id) {
     await updateDoc(doc(db, "quizzes", q.id), payload);
   } else {
@@ -939,6 +987,9 @@ function renderControl() {
   if (s.status === "reveal") return renderReveal();
   if (s.status === "leaderboard") return renderLeaderboard();
   if (s.status === "racing") return renderRaceControl();
+  if (s.status === "bluffwrite") return renderBluffWrite();
+  if (s.status === "bluffvote") return renderBluffVote();
+  if (s.status === "bluffreveal") return renderBluffReveal();
   if (s.status === "ended") return renderEnded();
 }
 
@@ -1018,7 +1069,8 @@ function renderLobby() {
 }
 
 async function beginGame() {
-  await updateDoc(doc(db, "sessions", sessionCode), { status: "question", currentIndex: 0, questionStartedAt: Date.now() });
+  const status = sessionData.gameMode === "blefe" ? "bluffwrite" : "question";
+  await updateDoc(doc(db, "sessions", sessionCode), { status, currentIndex: 0, questionStartedAt: Date.now() });
 }
 
 /* ---------------- corrida livre ---------------- */
@@ -1080,6 +1132,139 @@ async function endRace() {
   scoresSnap.forEach((d) => (totals[d.id] = d.data().total || 0));
   const final = buildLeaderboardRows({ gameMode: sessionData.gameMode, teamMode: sessionData.teamMode, players: sessionPlayers, totals });
   await updateDoc(doc(db, "sessions", sessionCode), { status: "ended", finalLeaderboard: final });
+}
+
+/* ---------------- modo blefe ---------------- */
+let bluffPollInt = null;
+let bluffAutoAdvanced = false;
+
+function renderBluffWrite() {
+  clearInterval(bluffPollInt);
+  bluffAutoAdvanced = false;
+  const s = sessionData;
+  const q = s.questions[s.currentIndex];
+  root.innerHTML = `
+    <div class="eyebrow" style="text-align:center;">blefe · pergunta ${s.currentIndex + 1} de ${s.questions.length}</div>
+    <h2 style="text-align:center; font-size:20px; margin:14px 0;">${escapeHtml(q.text)}</h2>
+    <p style="color:var(--text-dim); text-align:center; font-size:13px;">Cada jogador está escrevendo a própria resposta falsa no celular...</p>
+    <div id="bluff-write-count" style="color:var(--text-dim); margin-top:18px; text-align:center;">carregando...</div>
+    <button class="btn btn-primary btn-block" id="bluff-vote-btn" style="margin-top:18px;">Ir pra votação agora</button>
+  `;
+  document.getElementById("bluff-vote-btn").onclick = goToBluffVote;
+
+  const tick = async () => {
+    const total = Object.keys(sessionPlayers).length;
+    const snap = await getDocs(query(collection(db, "sessions", sessionCode, "bluffs"), where("questionIndex", "==", s.currentIndex)));
+    const el = document.getElementById("bluff-write-count");
+    if (el) el.textContent = `${snap.size} de ${total} já escreveram`;
+    if (!bluffAutoAdvanced && total > 0 && snap.size >= total) {
+      bluffAutoAdvanced = true;
+      goToBluffVote();
+    }
+  };
+  tick();
+  bluffPollInt = setInterval(tick, 1500);
+}
+
+async function goToBluffVote() {
+  clearInterval(bluffPollInt);
+  await updateDoc(doc(db, "sessions", sessionCode), { status: "bluffvote" });
+}
+
+function renderBluffVote() {
+  clearInterval(bluffPollInt);
+  bluffAutoAdvanced = false;
+  const s = sessionData;
+  const q = s.questions[s.currentIndex];
+  root.innerHTML = `
+    <div class="eyebrow" style="text-align:center;">blefe · votação</div>
+    <h2 style="text-align:center; font-size:20px; margin:14px 0;">${escapeHtml(q.text)}</h2>
+    <p style="color:var(--text-dim); text-align:center; font-size:13px;">Cada um está votando em qual resposta acha que é a verdadeira...</p>
+    <div id="bluff-vote-count" style="color:var(--text-dim); margin-top:18px; text-align:center;">carregando...</div>
+    <button class="btn btn-primary btn-block" id="bluff-reveal-btn" style="margin-top:18px;">Revelar agora</button>
+  `;
+  document.getElementById("bluff-reveal-btn").onclick = revealBluff;
+
+  const tick = async () => {
+    const total = Object.keys(sessionPlayers).length;
+    const snap = await getDocs(query(collection(db, "sessions", sessionCode, "votes"), where("questionIndex", "==", s.currentIndex)));
+    const el = document.getElementById("bluff-vote-count");
+    if (el) el.textContent = `${snap.size} de ${total} já votaram`;
+    if (!bluffAutoAdvanced && total > 0 && snap.size >= total) {
+      bluffAutoAdvanced = true;
+      revealBluff();
+    }
+  };
+  tick();
+  bluffPollInt = setInterval(tick, 1500);
+}
+
+async function revealBluff() {
+  clearInterval(bluffPollInt);
+  const s = sessionData;
+  const idx = s.currentIndex;
+  const q = s.questions[idx];
+  const correctText = q.options[q.correct[0]];
+
+  const bluffsSnap = await getDocs(query(collection(db, "sessions", sessionCode, "bluffs"), where("questionIndex", "==", idx)));
+  const bluffsByPlayer = {};
+  bluffsSnap.forEach((d) => (bluffsByPlayer[d.data().playerId] = d.data().text));
+
+  const votesSnap = await getDocs(query(collection(db, "sessions", sessionCode, "votes"), where("questionIndex", "==", idx)));
+  const votes = votesSnap.docs.map((d) => d.data());
+  const voteCounts = {};
+  votes.forEach((v) => { voteCounts[v.votedFor] = (voteCounts[v.votedFor] || 0) + 1; });
+
+  const writes = [];
+  for (const pid of Object.keys(sessionPlayers)) {
+    const prevScoreSnap = await getDoc(doc(db, "sessions", sessionCode, "scores", pid));
+    const prevTotal = prevScoreSnap.exists() ? prevScoreSnap.data().total || 0 : 0;
+    const myVote = votes.find((v) => v.playerId === pid);
+    const guessedRight = !!myVote && myVote.votedFor === "correct";
+    const guessPoints = guessedRight ? 500 : 0;
+    const foolCount = voteCounts[pid] || 0;
+    const foolBonus = foolCount * 250;
+    const roundPoints = guessPoints + foolBonus;
+    writes.push(setDoc(doc(db, "sessions", sessionCode, "scores", pid), {
+      total: prevTotal + roundPoints, lastPoints: roundPoints, lastCorrect: guessedRight, lastFoolCount: foolCount, lastGuessPoints: guessPoints, lastFoolBonus: foolBonus,
+    }));
+  }
+  await Promise.all(writes);
+
+  await updateDoc(doc(db, "sessions", sessionCode), {
+    status: "bluffreveal",
+    bluffRevealData: { correctText, bluffs: bluffsByPlayer, voteCounts },
+  });
+}
+
+function renderBluffReveal() {
+  const s = sessionData;
+  const data = s.bluffRevealData || { correctText: "", bluffs: {}, voteCounts: {} };
+  const rows = [
+    { label: data.correctText, isCorrect: true, votes: data.voteCounts.correct || 0, authorName: null },
+    ...Object.entries(data.bluffs).map(([pid, text]) => ({
+      label: text, isCorrect: false, votes: data.voteCounts[pid] || 0, authorName: sessionPlayers[pid]?.name || "?",
+    })),
+  ];
+  root.innerHTML = `
+    <div class="eyebrow" style="text-align:center;">blefe · revelação</div>
+    <h2 style="text-align:center; font-size:20px; margin:14px 0;">A resposta verdadeira era:</h2>
+    <div style="display:flex; flex-direction:column; gap:10px;">
+      ${rows.map((r) => `
+        <div style="display:flex; align-items:center; gap:10px; border-radius:12px; padding:12px 14px; ${r.isCorrect ? "background:rgba(61,220,151,.16); border:2px solid var(--green);" : "background:var(--surface); border:1px solid var(--surface-line);"}">
+          <div style="flex:1; color:var(--text); font-weight:600; font-size:14px;">
+            ${escapeHtml(r.label)}<br>
+            <span style="color:${r.isCorrect ? "var(--green)" : "var(--text-dim)"}; font-size:11px; font-weight:700;">${r.isCorrect ? "✓ verdadeira" : `blefe de ${escapeHtml(r.authorName)}`}</span>
+          </div>
+          <span style="font-size:12px; color:var(--text-dim); white-space:nowrap;">${r.votes} voto${r.votes !== 1 ? "s" : ""}</span>
+        </div>
+      `).join("")}
+    </div>
+    <button class="btn btn-primary btn-block" id="bluff-leaderboard-btn" style="margin-top:18px;">Ver placar →</button>
+    <div id="ready-count-bluffreveal" style="text-align:center; font-size:11px; color:var(--text-dim); margin-top:8px;"></div>
+  `;
+  document.getElementById("bluff-leaderboard-btn").onclick = showLeaderboard;
+  pollReadyCount("bluffreveal", showLeaderboard, "ready-count-bluffreveal");
 }
 
 let liveTimerInt = null;
@@ -1200,6 +1385,38 @@ async function revealAnswers() {
   await updateDoc(doc(db, "sessions", sessionCode), sessionUpdate);
 }
 
+let readyPollInt = null;
+let readyAutoAdvanced = false;
+
+// Espera todo mundo (ou o admin, manualmente) pra avançar de fase. Some
+// jogadores ativos que já clicaram "Continuar" na fase atual (revelação
+// ou placar) e, quando todos já apertaram, avança sozinho.
+function pollReadyCount(phase, onComplete, elId) {
+  clearInterval(readyPollInt);
+  readyAutoAdvanced = false;
+  const s = sessionData;
+  const eliminated = new Set(s.eliminatedPlayerIds || []);
+  const activeIds = Object.keys(sessionPlayers).filter((pid) => !eliminated.has(pid));
+  const total = activeIds.length;
+  const tick = async () => {
+    const snap = await getDocs(query(
+      collection(db, "sessions", sessionCode, "ready"),
+      where("questionIndex", "==", s.currentIndex),
+      where("phase", "==", phase)
+    ));
+    const readyActive = snap.docs.filter((d) => activeIds.includes(d.data().playerId)).length;
+    const el = document.getElementById(elId);
+    if (el) el.textContent = total > 0 ? `${readyActive} de ${total} já continuaram` : "";
+    if (!readyAutoAdvanced && total > 0 && readyActive >= total) {
+      readyAutoAdvanced = true;
+      clearInterval(readyPollInt);
+      onComplete();
+    }
+  };
+  tick();
+  readyPollInt = setInterval(tick, 1500);
+}
+
 function renderReveal() {
   const s = sessionData;
   const q = s.questions[s.currentIndex];
@@ -1222,8 +1439,10 @@ function renderReveal() {
         </div>`;
     }).join("")}
     <button class="btn btn-primary btn-block" id="leaderboard-btn" style="margin-top:18px;">Ver placar →</button>
+    <div id="ready-count-reveal" style="text-align:center; font-size:11px; color:var(--text-dim); margin-top:8px;"></div>
   `;
   document.getElementById("leaderboard-btn").onclick = showLeaderboard;
+  pollReadyCount("reveal", showLeaderboard, "ready-count-reveal");
 }
 
 async function showLeaderboard() {
@@ -1236,9 +1455,21 @@ async function showLeaderboard() {
 
 function renderLeaderboard() {
   const s = sessionData;
+  const groupTotal = s.gameMode === "cooperativo" ? (s.leaderboardTop[0]?.total || 0) : null;
+  const progress = s.gameMode === "cooperativo" ? cooperativeProgress(s, groupTotal) : null;
   root.innerHTML = `
     <div class="eyebrow" style="text-align:center;">placar</div>
     <h2 style="text-align:center; font-size:24px; margin-top:6px;">Colocação</h2>
+    ${progress ? `
+      <div style="margin-top:14px;">
+        <div style="display:flex; justify-content:space-between; font-size:12px; color:var(--text-dim); margin-bottom:4px;">
+          <span>Meta: ${progress.goalPoints} pts</span><span>${progress.pct}%${progress.met ? " ✓ batida!" : ""}</span>
+        </div>
+        <div style="background:var(--surface); border:1px solid var(--surface-line); border-radius:8px; height:14px; overflow:hidden;">
+          <div style="width:${progress.pct}%; height:100%; background:${progress.met ? "var(--green)" : "var(--gold)"};"></div>
+        </div>
+      </div>
+    ` : ""}
     <div style="margin-top:16px;">
       ${s.leaderboardTop.map((p, i) => `
         <div class="rank-row">
@@ -1253,8 +1484,10 @@ function renderLeaderboard() {
     <button class="btn btn-primary btn-block" id="next-btn" style="margin-top:18px;">
       ${s.currentIndex + 1 >= s.questions.length ? "Ver resultado final →" : "Próxima pergunta →"}
     </button>
+    <div id="ready-count-leaderboard" style="text-align:center; font-size:11px; color:var(--text-dim); margin-top:8px;"></div>
   `;
   document.getElementById("next-btn").onclick = nextQuestion;
+  pollReadyCount("leaderboard", nextQuestion, "ready-count-leaderboard");
   root.querySelectorAll("[data-remove-player]").forEach((btn) => {
     btn.onclick = async () => {
       const id = btn.dataset.removePlayer;
@@ -1281,14 +1514,24 @@ async function nextQuestion() {
     return;
   }
   revealStats = null;
-  await updateDoc(doc(db, "sessions", sessionCode), { status: "question", currentIndex: nextIdx, questionStartedAt: Date.now() });
+  const status = s.gameMode === "blefe" ? "bluffwrite" : "question";
+  await updateDoc(doc(db, "sessions", sessionCode), { status, currentIndex: nextIdx, questionStartedAt: Date.now() });
 }
 
 function renderEnded() {
   const s = sessionData;
+  const groupTotal = s.gameMode === "cooperativo" ? (s.finalLeaderboard[0]?.total || 0) : null;
+  const progress = s.gameMode === "cooperativo" ? cooperativeProgress(s, groupTotal) : null;
   root.innerHTML = `
     <div style="font-size:48px; text-align:center;">🏆</div>
     <h2 style="text-align:center; font-size:24px;">Resultado final</h2>
+    ${progress ? `
+      <div style="text-align:center; margin-top:10px;">
+        <div style="font-size:14px; color:${progress.met ? "var(--green)" : "var(--text-dim)"}; font-weight:700;">
+          ${progress.met ? "🎉 Meta batida!" : "Meta não batida"} — ${groupTotal} / ${progress.goalPoints} pts (${progress.pct}%)
+        </div>
+      </div>
+    ` : ""}
     <div style="margin-top:16px;">
       ${s.finalLeaderboard.map((p, i) => `
         <div class="rank-row">
@@ -1456,11 +1699,69 @@ async function openReport(code) {
   const playersSnap = await getDocs(collection(db, "sessions", code, "players"));
   const players = {};
   playersSnap.forEach((d) => (players[d.id] = d.data()));
+  const playerIds = Object.keys(players);
+
+  if (sess.gameMode === "blefe") {
+    // Modo Blefe não usa "answers" — a pontuação de cada rodada não
+    // depende de sequência (sem combo), então dá pra recalcular certinho
+    // direto dos blefes e votos de cada pergunta.
+    const bluffsSnap = await getDocs(collection(db, "sessions", code, "bluffs"));
+    const votesSnap = await getDocs(collection(db, "sessions", code, "votes"));
+    const bluffsByQ = {};
+    bluffsSnap.forEach((d) => {
+      const data = d.data();
+      (bluffsByQ[data.questionIndex] ||= {})[data.playerId] = data.text;
+    });
+    const votesByQ = {};
+    votesSnap.forEach((d) => {
+      const data = d.data();
+      (votesByQ[data.questionIndex] ||= []).push(data);
+    });
+
+    const perQuestion = sess.questions.map((q, idx) => {
+      const bluffs = bluffsByQ[idx] || {};
+      const votes = votesByQ[idx] || [];
+      const voteCounts = {};
+      votes.forEach((v) => { voteCounts[v.votedFor] = (voteCounts[v.votedFor] || 0) + 1; });
+      const correctText = q.options[q.correct[0]];
+      const rows = playerIds.map((pid) => {
+        const myVote = votes.find((v) => v.playerId === pid);
+        const guessedRight = !!myVote && myVote.votedFor === "correct";
+        const foolCount = voteCounts[pid] || 0;
+        const bonus = foolCount * 250;
+        const points = (guessedRight ? 500 : 0) + bonus;
+        const votedLabel = myVote ? (myVote.votedFor === "correct" ? correctText : (bluffs[myVote.votedFor] || "?")) : "não votou";
+        return {
+          playerId: pid,
+          name: players[pid].name,
+          avatar: players[pid].avatar,
+          answered: !!myVote,
+          selectedLabels: `votou: ${votedLabel}${bluffs[pid] ? ` · blefe dele(a): "${bluffs[pid]}"` : ""}${foolCount ? ` · enganou ${foolCount}` : ""}`,
+          timeMs: null,
+          correct: guessedRight,
+          points,
+          combo: 0,
+          bonus,
+        };
+      });
+      return { text: q.text, correctLabels: correctText, rows };
+    });
+
+    const totals = playerIds.map((pid) => ({
+      playerId: pid,
+      name: players[pid].name,
+      avatar: players[pid].avatar,
+      total: perQuestion.reduce((sum, q) => sum + (q.rows.find((r) => r.playerId === pid)?.points || 0), 0),
+    })).sort((a, b) => b.total - a.total);
+
+    reportData = { title: sess.title, code, perQuestion, totals };
+    if (view === "report") render();
+    return;
+  }
+
   const answersSnap = await getDocs(collection(db, "sessions", code, "answers"));
   const answers = {}; // `${idx}_${pid}` -> data
   answersSnap.forEach((d) => (answers[d.id] = d.data()));
-
-  const playerIds = Object.keys(players);
 
   // recalcula pergunta por pergunta, na ordem, pra reconstruir o combo de
   // cada jogador exatamente como aconteceu ao vivo
