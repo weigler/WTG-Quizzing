@@ -19,13 +19,23 @@ export function buildLeaderboardRows({ gameMode, teamMode, players, totals }) {
   }
 
   if (teamMode) {
-    const byTeam = {};
+    const sumByTeam = {};
+    const countByTeam = {};
     entries.forEach((e) => {
       const t = e.team || "Sem time";
-      byTeam[t] = (byTeam[t] || 0) + e.total;
+      sumByTeam[t] = (sumByTeam[t] || 0) + e.total;
+      countByTeam[t] = (countByTeam[t] || 0) + 1;
     });
-    return Object.entries(byTeam)
-      .map(([team, total]) => ({ id: team, name: `🏳️ ${team}`, avatar: null, total }))
+    // média, não soma — senão um time com mais gente pontuaria mais só
+    // por ter mais gente, mesmo jogando pior
+    return Object.entries(sumByTeam)
+      .map(([team, sum]) => ({
+        id: team,
+        name: `🏳️ ${team}`,
+        avatar: null,
+        total: Math.round(sum / (countByTeam[team] || 1)),
+        memberCount: countByTeam[team] || 0,
+      }))
       .sort((a, b) => b.total - a.total);
   }
 

@@ -62,21 +62,28 @@ diferentes. As opções:
 
 - **Clássico** — pergunta → revelação → placar → próxima.
 - **Equipes** — jogadores escolhem um time ao entrar (você define os
-  nomes na hora de abrir a sala); o placar soma por equipe. Dois
-  submodos: **cada integrante responde** (todo mundo do time joga e os
-  pontos somam) ou **um aparelho só por equipe** (só uma pessoa por time
-  entra, representando o time inteiro — times já ocupados aparecem
-  travados pros outros).
-- **Sobrevivência** — quem responde errado é eliminado e vira espectador;
-  o jogo segue até sobrar pouca gente (se todo mundo erraria junto,
-  ninguém é eliminado naquela rodada, pra sempre sobrar alguém).
+  nomes na hora de abrir a sala); o placar usa a **média** dos pontos do
+  time (não a soma), pra um time com mais gente não pontuar mais só por
+  ter mais gente. Dois submodos: **cada integrante responde** (todo mundo
+  do time joga e a pontuação faz a média) ou **um aparelho só por equipe**
+  (só uma pessoa por time entra, representando o time inteiro — times já
+  ocupados aparecem travados pros outros).
+- **Sobrevivência** — quem responde errado (ou não responde) é eliminado
+  e vira espectador — mesmo que isso zere todo mundo de uma vez. Quem é
+  eliminado pode baixar o próprio resultado em PDF na hora, e continua
+  acompanhando até o jogo acabar de verdade pra todo mundo.
 - **Cooperativo** — sem ranking individual: todo mundo soma pra um placar
   coletivo único. Dá pra definir uma **meta** opcional (em pontos fixos
   ou em % do máximo possível daquele quiz) pra saber se o grupo "bateu a
   meta" ao final.
 - **Corrida livre** — sem pausa pra revelação entre perguntas: cada
-  jogador avança sozinho, no seu próprio ritmo, dentro de um tempo total
-  compartilhado; o placar atualiza ao vivo pra quem está controlando.
+  jogador avança sozinho, no seu próprio ritmo. Dois submodos:
+  **sincronizada** (todo mundo compartilha um único cronômetro, que
+  começa quando você clica em "Começar corrida") ou **assíncrona** (a
+  sala fica aberta por um período que você escolhe — horas ou dias — e
+  cada jogador entra e joga quando quiser, com o próprio tempo total pra
+  responder tudo, dentro dessa janela; dá pra fechar a sala antes ou
+  estender o prazo, enquanto a janela não tiver fechado).
 - **Blefe** — cada pergunta vira uma rodada de blefe: todo mundo escreve
   a própria resposta falsa (mas convincente), depois todo mundo vota em
   qual acha que é a verdadeira. Quem acerta a verdadeira ganha pontos;
@@ -148,13 +155,16 @@ houver) quando certo, não importa a velocidade. Bom pra quizzes onde
 pensar com calma deveria valer tanto quanto ser rápido.
 
 ### Relatório completo
-Depois (ou durante) qualquer sessão, dá pra ver um relatório detalhado:
-classificação geral, e pergunta por pergunta quem respondeu o quê, se
-acertou, quanto tempo levou, o combo (com os pontos de bônus) e quantos
-pontos ganhou no total. Exporta em **CSV** ou em **PDF** — de graça, sem
-limitar isso a um plano pago. Pela mesma tela também dá pra **excluir**
-uma sessão inteira (em andamento ou já encerrada), removendo sala,
-jogadores, respostas e pontuações dela.
+A aba **Sessões** lista todas as salas já abertas, mostrando o **modo de
+jogo** de cada uma. Depois (ou durante) qualquer sessão, dá pra ver um
+relatório detalhado: classificação geral (já respeitando equipes ou
+placar coletivo, quando for o caso), e pergunta por pergunta quem
+respondeu o quê, se acertou, quanto tempo levou, o combo (com os pontos
+de bônus) e quantos pontos ganhou no total. Exporta em **CSV** ou em
+**PDF** (com o modo de jogo no cabeçalho) — de graça, sem limitar isso a
+um plano pago. Pela mesma tela também dá pra **excluir** uma sessão
+inteira (em andamento ou já encerrada), removendo sala, jogadores,
+respostas e pontuações dela.
 
 ---
 

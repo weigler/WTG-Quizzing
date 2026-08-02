@@ -258,6 +258,9 @@ function defaultLaunchConfig() {
     teamSubmode: "individual",
     teams: ["Time Azul", "Time Vermelho"],
     cooperativeGoal: { type: "none", value: 0 },
+    raceSubmode: "sync",
+    raceWindowValue: 24,
+    raceWindowUnit: "horas",
   };
 }
 
@@ -298,6 +301,11 @@ async function launchSession(quiz, config) {
     eliminatedPlayerIds: [],
     raceDurationSec: questions.reduce((sum, q) => sum + (q.timeLimit || 20), 0),
     raceStartedAt: null,
+    raceSubmode: gameMode === "corrida" ? (config.raceSubmode || "sync") : null,
+    raceWindowMs: gameMode === "corrida" && config.raceSubmode === "async"
+      ? config.raceWindowValue * (config.raceWindowUnit === "dias" ? 86400000 : 3600000)
+      : null,
+    raceWindowEndsAt: null,
     currentIndex: -1,
     questionStartedAt: null,
     createdAt: serverTimestamp(),
@@ -312,7 +320,7 @@ async function launchSession(quiz, config) {
 const GAME_MODE_HINTS = {
   classico: "Ritmo normal: pergunta, revelação, placar, próxima.",
   equipes: "Jogadores entram escolhendo um time; o placar soma por equipe.",
-  sobrevivencia: "Quem responde errado é eliminado e vira espectador — o jogo segue até sobrar pouca gente. Se todo mundo erraria na mesma rodada, ninguém é eliminado dessa vez.",
+  sobrevivencia: "Quem responde errado (ou não responde) é eliminado e vira espectador — mesmo que isso zere todo mundo de uma vez.",
   cooperativo: "Não tem ranking individual — todo mundo soma pra um placar coletivo só.",
   corrida: "Sem revelação entre perguntas: cada jogador responde a próxima pergunta assim que termina a atual, no seu próprio ritmo, até o tempo total acabar.",
   blefe: "Cada pergunta vira uma rodada de blefe: todo mundo escreve uma resposta falsa convincente, depois vota em qual acha que é a verdadeira. Pontua quem acerta e quem engana os outros.",
@@ -361,6 +369,27 @@ function renderLaunchConfig() {
       <div style="font-size:11px; color:var(--text-dim); margin-top:6px;">Máximo possível deste quiz: ${cooperativeMaxPoints(launchQuiz.questions)} pontos.</div>
     </div>
 
+    <div id="launch-race-config" style="display:${c.gameMode === "corrida" ? "block" : "none"}; margin-top:16px;">
+      <label style="font-size:13px; color:var(--text-dim);">Como a corrida funciona</label>
+      <select class="input" id="launch-race-submode" style="margin-top:6px; margin-bottom:10px;">
+        <option value="sync" ${c.raceSubmode === "sync" ? "selected" : ""}>Todo mundo começa junto (tempo compartilhado)</option>
+        <option value="async" ${c.raceSubmode === "async" ? "selected" : ""}>Sala aberta por um período — cada um joga quando quiser</option>
+      </select>
+      <div id="launch-race-window" style="display:${c.raceSubmode === "async" ? "flex" : "none"}; gap:8px; align-items:center;">
+        <span style="font-size:13px; color:var(--text-dim);">Sala fica aberta por</span>
+        <input class="input" type="number" min="1" id="launch-race-window-value" value="${c.raceWindowValue}" style="width:80px;" />
+        <select class="input" id="launch-race-window-unit" style="width:110px;">
+          <option value="horas" ${c.raceWindowUnit === "horas" ? "selected" : ""}>horas</option>
+          <option value="dias" ${c.raceWindowUnit === "dias" ? "selected" : ""}>dias</option>
+        </select>
+      </div>
+      <div style="font-size:11px; color:var(--text-dim); margin-top:6px;">
+        ${c.raceSubmode === "async"
+          ? `Cada jogador tem ${(launchQuiz.questions || []).reduce((sum, q) => sum + (q.timeLimit || 20), 0)}s pra responder tudo, a partir do momento em que ele mesmo começar — dentro da janela que você definir. Dá pra fechar antes ou estender depois, enquanto a janela não tiver acabado.`
+          : "Um único cronômetro compartilhado começa quando você clicar em \"Começar corrida\"."}
+      </div>
+    </div>
+
     <button class="btn btn-success btn-block" id="launch-confirm" style="margin-top:24px;">Abrir sala →</button>
   `;
 
@@ -383,6 +412,16 @@ function renderLaunchConfig() {
   });
   document.getElementById("launch-goal-value")?.addEventListener("input", (e) => {
     c.cooperativeGoal.value = Number(e.target.value) || 0;
+  });
+  document.getElementById("launch-race-submode")?.addEventListener("change", (e) => {
+    c.raceSubmode = e.target.value;
+    renderLaunchConfig();
+  });
+  document.getElementById("launch-race-window-value")?.addEventListener("input", (e) => {
+    c.raceWindowValue = Math.max(1, Number(e.target.value) || 1);
+  });
+  document.getElementById("launch-race-window-unit")?.addEventListener("change", (e) => {
+    c.raceWindowUnit = e.target.value;
   });
   document.getElementById("launch-confirm").onclick = () => launchSession(launchQuiz, c);
 }
@@ -630,6 +669,7 @@ function renderQuestionForm() {
     quizDraft.questions.forEach((item) => { item.imageUrl = d.imageUrl; item.imageCredit = d.imageCredit; });
     quizDraft.defaultQuestionImage = { url: d.imageUrl, credit: d.imageCredit };
     renderQuestionList();
+    renderQuestionForm();
     document.getElementById("q-img-apply-result").textContent = `✓ imagem aplicada às ${quizDraft.questions.length} pergunta(s) já cadastradas — e as próximas já nascem com ela também.`;
   });
   document.getElementById("q-text").oninput = (e) => {
@@ -986,7 +1026,7 @@ function renderControl() {
   if (s.status === "question") return renderQuestionLive();
   if (s.status === "reveal") return renderReveal();
   if (s.status === "leaderboard") return renderLeaderboard();
-  if (s.status === "racing") return renderRaceControl();
+  if (s.status === "racing") return s.raceSubmode === "async" ? renderRaceAsyncControl() : renderRaceControl();
   if (s.status === "bluffwrite") return renderBluffWrite();
   if (s.status === "bluffvote") return renderBluffVote();
   if (s.status === "bluffreveal") return renderBluffReveal();
@@ -1022,7 +1062,7 @@ function renderLobby() {
         `).join("") || `<span style="color:var(--text-dim); font-size:13px;">Aguardando entrarem...</span>`}
       </div>
     </div>
-    <button class="btn btn-primary btn-block" id="begin-btn" style="margin-top:22px;" ${playerEntries.length === 0 ? "disabled" : ""}>${sessionData.gameMode === "corrida" ? "Começar corrida →" : "Começar jogo →"}</button>
+    <button class="btn btn-primary btn-block" id="begin-btn" style="margin-top:22px;" ${playerEntries.length === 0 && sessionData.raceSubmode !== "async" ? "disabled" : ""}>${sessionData.gameMode === "corrida" ? (sessionData.raceSubmode === "async" ? "Abrir corrida assíncrona →" : "Começar corrida →") : "Começar jogo →"}</button>
     <button class="btn btn-ghost btn-block" id="cancel-session-btn" style="margin-top:10px;">Cancelar e excluir esta sala</button>
   `;
   document.getElementById("control-back").onclick = () => { view = "list"; unsubSession(); unsubPlayers(); unsubRaceScores && unsubRaceScores(); render(); };
@@ -1088,7 +1128,21 @@ function subscribeRaceScores(code) {
 }
 
 async function beginRace() {
-  await updateDoc(doc(db, "sessions", sessionCode), { status: "racing", raceStartedAt: Date.now() });
+  const s = sessionData;
+  if (s.raceSubmode === "async") {
+    await updateDoc(doc(db, "sessions", sessionCode), {
+      status: "racing",
+      raceWindowEndsAt: Date.now() + (s.raceWindowMs || 86400000),
+    });
+  } else {
+    await updateDoc(doc(db, "sessions", sessionCode), { status: "racing", raceStartedAt: Date.now() });
+  }
+}
+
+async function extendRaceWindow(extraMs) {
+  const s = sessionData;
+  const base = s.raceWindowEndsAt && s.raceWindowEndsAt > Date.now() ? s.raceWindowEndsAt : Date.now();
+  await updateDoc(doc(db, "sessions", sessionCode), { raceWindowEndsAt: base + extraMs });
 }
 
 function renderRaceControl() {
@@ -1132,6 +1186,77 @@ async function endRace() {
   scoresSnap.forEach((d) => (totals[d.id] = d.data().total || 0));
   const final = buildLeaderboardRows({ gameMode: sessionData.gameMode, teamMode: sessionData.teamMode, players: sessionPlayers, totals });
   await updateDoc(doc(db, "sessions", sessionCode), { status: "ended", finalLeaderboard: final });
+}
+
+function fmtDuration(ms) {
+  if (ms <= 0) return "0min";
+  const totalMin = Math.ceil(ms / 60000);
+  const days = Math.floor(totalMin / 1440);
+  const hours = Math.floor((totalMin % 1440) / 60);
+  const min = totalMin % 60;
+  const parts = [];
+  if (days) parts.push(`${days}d`);
+  if (hours) parts.push(`${hours}h`);
+  if (min && !days) parts.push(`${min}min`);
+  return parts.join(" ") || "0min";
+}
+
+function renderRaceAsyncControl() {
+  clearInterval(raceControlInt);
+  const s = sessionData;
+  const remainingMs = (s.raceWindowEndsAt || 0) - Date.now();
+  const windowOpen = remainingMs > 0;
+  const rows = buildLeaderboardRows({ gameMode: s.gameMode, teamMode: s.teamMode, players: sessionPlayers, totals: raceScoresCache }).slice(0, 10);
+
+  root.innerHTML = `
+    <div class="eyebrow" style="text-align:center;">corrida assíncrona</div>
+    <h2 style="text-align:center; font-size:20px; margin:10px 0;">${windowOpen ? "Sala aberta" : "Janela encerrada"}</h2>
+    <div style="text-align:center; color:${windowOpen ? "var(--gold)" : "var(--coral)"}; font-weight:700; font-size:16px;" id="race-window-status">
+      ${windowOpen ? `Fecha em ${fmtDuration(remainingMs)}` : "Aguardando você encerrar e calcular o resultado"}
+    </div>
+    <p style="color:var(--text-dim); text-align:center; font-size:12px; margin-top:6px;">
+      Cada jogador entra e joga quando quiser, com o próprio tempo de ${Math.round((s.raceDurationSec || 0) / 60)}min pra responder tudo — dentro dessa janela.
+    </p>
+
+    <div style="margin-top:20px;">
+      ${rows.map((p, i) => `
+        <div class="rank-row">
+          <span class="rank-num" style="color:${i === 0 ? "var(--gold)" : "var(--text-dim)"};">${i + 1}</span>
+          ${p.avatar ? `<span class="mini-avatar">${avatarSVG(p.avatar, 30)}</span>` : ""}
+          <span style="flex:1; font-weight:600;">${escapeHtml(p.name)}</span>
+          <span style="color:var(--gold); font-weight:700;">${p.total}</span>
+        </div>
+      `).join("") || `<div style="color:var(--text-dim); font-size:13px;">Ninguém jogou ainda...</div>`}
+    </div>
+
+    ${windowOpen ? `
+      <div style="display:flex; gap:8px; margin-top:18px;">
+        <input class="input" type="number" min="1" id="extend-value" value="1" style="width:80px;" />
+        <select class="input" id="extend-unit" style="width:110px;">
+          <option value="horas">horas</option>
+          <option value="dias">dias</option>
+        </select>
+        <button class="btn btn-ghost" id="extend-btn" style="width:auto; padding:10px 14px; white-space:nowrap;">Estender</button>
+      </div>
+    ` : ""}
+    <button class="btn btn-primary btn-block" id="close-race-btn" style="margin-top:12px;">
+      ${windowOpen ? "Fechar sala agora e ver resultado" : "Ver resultado final"}
+    </button>
+  `;
+  document.getElementById("close-race-btn").onclick = endRace;
+  document.getElementById("extend-btn")?.addEventListener("click", () => {
+    const value = Math.max(1, Number(document.getElementById("extend-value").value) || 1);
+    const unit = document.getElementById("extend-unit").value;
+    extendRaceWindow(value * (unit === "dias" ? 86400000 : 3600000));
+  });
+
+  raceControlInt = setInterval(() => {
+    if (sessionData.status !== "racing") { clearInterval(raceControlInt); return; }
+    const rem = (sessionData.raceWindowEndsAt || 0) - Date.now();
+    const el = document.getElementById("race-window-status");
+    if (el && rem > 0) el.textContent = `Fecha em ${fmtDuration(rem)}`;
+    if (rem <= 0 && view === "control") render();
+  }, 30000);
 }
 
 /* ---------------- modo blefe ---------------- */
@@ -1375,12 +1500,7 @@ async function revealAnswers() {
 
   const sessionUpdate = { status: "reveal" };
   if (isSurvival && newlyWrong.length) {
-    const remainingBefore = Object.keys(sessionPlayers).length - eliminatedBefore.size;
-    // salvaguarda: se todo mundo que ainda restava errou junto, ninguém é
-    // eliminado dessa vez (senão o jogo acabaria sem ninguém)
-    if (remainingBefore - newlyWrong.length >= 1) {
-      sessionUpdate.eliminatedPlayerIds = [...eliminatedBefore, ...newlyWrong];
-    }
+    sessionUpdate.eliminatedPlayerIds = [...eliminatedBefore, ...newlyWrong];
   }
   await updateDoc(doc(db, "sessions", sessionCode), sessionUpdate);
 }
@@ -1474,7 +1594,7 @@ function renderLeaderboard() {
       ${s.leaderboardTop.map((p, i) => `
         <div class="rank-row">
           <span class="rank-num" style="color:${i === 0 ? "var(--gold)" : "var(--text-dim)"};">${i + 1}</span>
-          <span class="mini-avatar">${avatarSVG(p.avatar, 30)}</span>
+          ${p.avatar ? `<span class="mini-avatar">${avatarSVG(p.avatar, 30)}</span>` : ""}
           <span style="flex:1; font-weight:600;">${escapeHtml(p.name)}</span>
           <span style="color:var(--gold); font-weight:700;">${p.total}</span>
           <button type="button" class="rank-remove" data-remove-player="${p.id}" title="remover jogador">✕</button>
@@ -1536,7 +1656,7 @@ function renderEnded() {
       ${s.finalLeaderboard.map((p, i) => `
         <div class="rank-row">
           <span class="rank-num" style="color:${i === 0 ? "var(--gold)" : "var(--text-dim)"};">${i + 1}</span>
-          <span class="mini-avatar">${avatarSVG(p.avatar, 30)}</span>
+          ${p.avatar ? `<span class="mini-avatar">${avatarSVG(p.avatar, 30)}</span>` : ""}
           <span style="flex:1; font-weight:600;">${escapeHtml(p.name)}</span>
           <span style="color:var(--gold); font-weight:700;">${p.total}</span>
           <button type="button" class="rank-remove" data-remove-player="${p.id}" title="remover jogador">✕</button>
@@ -1605,6 +1725,7 @@ function renderSessionsError(err) {
 }
 
 function renderSessions() {
+  const modeLabel = (id) => GAME_MODES.find((m) => m.id === id)?.label || "Clássico";
   root.innerHTML = `
     ${navTabsHtml("sessions")}
     <h1 style="font-size:24px; margin-top:16px;">Sessões</h1>
@@ -1612,7 +1733,7 @@ function renderSessions() {
       ${sessionsList.map((s) => `
         <div class="q-row" style="align-items:center;">
           <div class="info">
-            <div class="meta">${s.code} · ${STATUS_LABEL[s.status] || s.status}${s.createdAt?.toDate ? " · " + s.createdAt.toDate().toLocaleString("pt-BR") : ""}</div>
+            <div class="meta">${s.code} · ${STATUS_LABEL[s.status] || s.status} · ${modeLabel(s.gameMode)}${s.createdAt?.toDate ? " · " + s.createdAt.toDate().toLocaleString("pt-BR") : ""}</div>
             <div class="text">${escapeHtml(s.title || "")}</div>
           </div>
           <button class="btn btn-ghost" id="open-session-${s.code}">${s.status === "ended" ? "Ver relatório" : "Abrir controle"}</button>
@@ -1747,14 +1868,18 @@ async function openReport(code) {
       return { text: q.text, correctLabels: correctText, rows };
     });
 
-    const totals = playerIds.map((pid) => ({
-      playerId: pid,
-      name: players[pid].name,
-      avatar: players[pid].avatar,
-      total: perQuestion.reduce((sum, q) => sum + (q.rows.find((r) => r.playerId === pid)?.points || 0), 0),
-    })).sort((a, b) => b.total - a.total);
+    const individualTotals = {};
+    playerIds.forEach((pid) => {
+      individualTotals[pid] = perQuestion.reduce((sum, q) => sum + (q.rows.find((r) => r.playerId === pid)?.points || 0), 0);
+    });
+    const totals = (sess.teamMode || sess.gameMode === "cooperativo")
+      ? buildLeaderboardRows({ gameMode: sess.gameMode, teamMode: sess.teamMode, players, totals: individualTotals })
+          .map((row) => ({ playerId: row.id, name: row.name, avatar: row.avatar, total: row.total }))
+      : playerIds.map((pid) => ({
+          playerId: pid, name: players[pid].name, avatar: players[pid].avatar, total: individualTotals[pid],
+        })).sort((a, b) => b.total - a.total);
 
-    reportData = { title: sess.title, code, perQuestion, totals };
+    reportData = { title: sess.title, code, gameMode: sess.gameMode, perQuestion, totals };
     if (view === "report") render();
     return;
   }
@@ -1804,14 +1929,18 @@ async function openReport(code) {
     return { text: q.text, correctLabels: q.correct.map((i) => q.options[i]).join(", "), rows };
   });
 
-  const totals = playerIds.map((pid) => ({
-    playerId: pid,
-    name: players[pid].name,
-    avatar: players[pid].avatar,
-    total: perPlayerScored[pid].reduce((sum, s) => sum + s.points, 0),
-  })).sort((a, b) => b.total - a.total);
+  const individualTotals = {};
+  playerIds.forEach((pid) => {
+    individualTotals[pid] = perPlayerScored[pid].reduce((sum, s) => sum + s.points, 0);
+  });
+  const totals = (sess.teamMode || sess.gameMode === "cooperativo")
+    ? buildLeaderboardRows({ gameMode: sess.gameMode, teamMode: sess.teamMode, players, totals: individualTotals })
+        .map((row) => ({ playerId: row.id, name: row.name, avatar: row.avatar, total: row.total }))
+    : playerIds.map((pid) => ({
+        playerId: pid, name: players[pid].name, avatar: players[pid].avatar, total: individualTotals[pid],
+      })).sort((a, b) => b.total - a.total);
 
-  reportData = { title: sess.title, code, perQuestion, totals };
+  reportData = { title: sess.title, code, gameMode: sess.gameMode, perQuestion, totals };
   if (view === "report") render();
 }
 
@@ -1820,7 +1949,7 @@ function renderReport() {
   const r = reportData;
   root.innerHTML = `
     <button class="btn-link" id="report-back">← voltar</button>
-    <div class="eyebrow" style="margin-top:10px;">relatório · sala ${r.code}</div>
+    <div class="eyebrow" style="margin-top:10px;">relatório · sala ${r.code} · ${GAME_MODES.find((m) => m.id === r.gameMode)?.label || "Clássico"}</div>
     <h1 style="font-size:24px; margin-top:4px;">${escapeHtml(r.title)}</h1>
     <div style="display:flex; gap:10px; margin-top:10px;">
       <button class="btn btn-ghost" id="csv-btn">Baixar CSV</button>
@@ -1832,7 +1961,7 @@ function renderReport() {
       ${r.totals.map((p, i) => `
         <div class="rank-row">
           <span class="rank-num" style="color:${i === 0 ? "var(--gold)" : "var(--text-dim)"};">${i + 1}</span>
-          <span class="mini-avatar">${avatarSVG(p.avatar, 30)}</span>
+          ${p.avatar ? `<span class="mini-avatar">${avatarSVG(p.avatar, 30)}</span>` : ""}
           <span style="flex:1; font-weight:600;">${escapeHtml(p.name)}</span>
           <span style="color:var(--gold); font-weight:700;">${p.total}</span>
           <button type="button" class="rank-remove" data-remove-player="${p.playerId}" title="remover jogador">✕</button>
@@ -1902,7 +2031,7 @@ function downloadReportPdf(r) {
   const pageH = doc.internal.pageSize.getHeight();
   const pageW = doc.internal.pageSize.getWidth();
 
-  let y = addPdfHeader(doc, { eyebrow: "relatório do quiz", title: r.title, subtitle: `sala ${r.code}` });
+  let y = addPdfHeader(doc, { eyebrow: "relatório do quiz", title: r.title, subtitle: `sala ${r.code} · ${GAME_MODES.find((m) => m.id === r.gameMode)?.label || "Clássico"}` });
   y = addSectionTitle(doc, "Classificação geral", y);
   doc.autoTable({
     startY: y,

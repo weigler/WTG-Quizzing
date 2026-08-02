@@ -40,6 +40,7 @@ let raceIndex = 0;
 let raceSelected = [];
 let raceQuestionShownAt = 0;
 let raceFeedback = null;
+let myRaceStartedAt = null;
 let bluffSubmitted = false;
 let voteSubmitted = false;
 let myBluffText = "";
@@ -80,6 +81,7 @@ async function boot() {
         code = saved.code; playerId = saved.playerId; playerName = saved.name;
         if (saved.avatar) avatarDraft = saved.avatar;
         if (saved.team) myTeam = saved.team;
+        if (saved.myRaceStartedAt) myRaceStartedAt = saved.myRaceStartedAt;
         sessionData = snap.data();
         lastIndexAnswered = sessionData.status === "lobby" ? -1 : sessionData.currentIndex;
         if (sessionData.status === "question") {
@@ -191,22 +193,38 @@ function startRace() {
   raceSelected = [];
   raceQuestionShownAt = Date.now();
   raceFeedback = null;
+  if (sessionData?.raceSubmode === "async" && !myRaceStartedAt) {
+    let saved = {};
+    try { saved = JSON.parse(localStorage.getItem("quiz-player") || "null") || {}; } catch { saved = {}; }
+    myRaceStartedAt = saved.myRaceStartedAt || Date.now();
+    localStorage.setItem("quiz-player", JSON.stringify({ ...saved, code, playerId, myRaceStartedAt }));
+  }
 }
 
 function renderRace() {
   const s = sessionData;
   root.className = "container left";
-  const totalElapsed = (Date.now() - (s.raceStartedAt || Date.now())) / 1000;
-  const remaining = Math.max(0, Math.ceil((s.raceDurationSec || 0) - totalElapsed));
+  const isAsync = s.raceSubmode === "async";
+  let remaining;
+  if (isAsync) {
+    const personalDeadline = (myRaceStartedAt || Date.now()) + (s.raceDurationSec || 0) * 1000;
+    const windowDeadline = s.raceWindowEndsAt || Infinity;
+    remaining = Math.max(0, Math.ceil((Math.min(personalDeadline, windowDeadline) - Date.now()) / 1000));
+  } else {
+    const totalElapsed = (Date.now() - (s.raceStartedAt || Date.now())) / 1000;
+    remaining = Math.max(0, Math.ceil((s.raceDurationSec || 0) - totalElapsed));
+  }
 
   if (remaining <= 0 || raceIndex >= s.questions.length) {
     root.className = "container";
     root.innerHTML = `
       <div class="eyebrow">corrida</div>
       <h1 style="font-size:22px; margin-top:8px;">${raceIndex >= s.questions.length ? "Você terminou! 🏁" : "Tempo esgotado!"}</h1>
-      <p style="color:var(--text-dim); margin-top:8px;">Aguardando o fim da corrida pra todo mundo...</p>
+      <p style="color:var(--text-dim); margin-top:8px;">${isAsync ? "Seu resultado já foi registrado — o organizador fecha a sala quando quiser." : "Aguardando o fim da corrida pra todo mundo..."}</p>
       <div style="color:var(--gold); font-weight:700; margin-top:14px;">Total: ${myScore?.total ?? 0} pontos</div>
     `;
+    if (isAsync) root.innerHTML += `<button class="btn-link" id="leave-btn-race" style="margin-top:16px;">sair da sala</button>`;
+    document.getElementById("leave-btn-race")?.addEventListener("click", leaveGame);
     return;
   }
 
@@ -221,7 +239,7 @@ function renderRace() {
 
   const q = s.questions[raceIndex];
   root.innerHTML = `
-    <div class="eyebrow">pergunta ${raceIndex + 1} de ${s.questions.length} · ${remaining}s restantes na corrida</div>
+    <div class="eyebrow">pergunta ${raceIndex + 1} de ${s.questions.length} · ${remaining}s restantes${isAsync ? " (seu tempo)" : " na corrida"}</div>
     ${q.imageUrl ? `<img class="q-image" src="${q.imageUrl}" style="margin-top:12px;" />` : ""}
     <h2 style="font-size:19px; margin:10px 0 14px;">${escapeHtml(q.text)}</h2>
     <div style="display:flex; flex-direction:column; gap:10px;" id="race-options"></div>
@@ -230,7 +248,7 @@ function renderRace() {
 
   const optsEl = document.getElementById("race-options");
   optsEl.innerHTML = q.options.map((opt, i) => `
-    <button type="button" class="option-btn ${OPTION_COLORS[i % 6]}" data-i="${i}" data-selected="false">
+    <button type="button" class="option-btn ${OPTION_COLORS[i % 6]}" data-i="${i}" data-selected="${raceSelected.includes(i) ? "true" : "false"}">
       <span class="${OPTION_SHAPES[i % 6]}"></span><span>${escapeHtml(opt)}</span>
     </button>
   `).join("");
@@ -251,8 +269,15 @@ function renderRace() {
 
   liveTimerInt = setInterval(() => {
     if (view !== "race" || raceFeedback) return;
-    const el = (Date.now() - (s.raceStartedAt || Date.now())) / 1000;
-    const rem = Math.max(0, Math.ceil((s.raceDurationSec || 0) - el));
+    let rem;
+    if (isAsync) {
+      const personalDeadline = (myRaceStartedAt || Date.now()) + (s.raceDurationSec || 0) * 1000;
+      const windowDeadline = s.raceWindowEndsAt || Infinity;
+      rem = Math.max(0, Math.ceil((Math.min(personalDeadline, windowDeadline) - Date.now()) / 1000));
+    } else {
+      const el = (Date.now() - (s.raceStartedAt || Date.now())) / 1000;
+      rem = Math.max(0, Math.ceil((s.raceDurationSec || 0) - el));
+    }
     if (rem <= 0) render();
   }, 1000);
 }
@@ -270,32 +295,35 @@ async function submitRaceAnswer(sel) {
   const selected = sel || raceSelected;
   if (selected.length === 0) return;
 
-  const timeMs = Date.now() - raceQuestionShownAt;
-  const selKey = [...selected].sort().join(",");
-  const corKey = [...(q.correct || [])].sort().join(",");
-  const correct = selKey === corKey && selKey !== "";
-  const points = correct ? kahootPoints(timeMs, q.timeLimit, q.pointsMultiplier || 1, !!s.precisionMode) : 0;
-
-  await setDoc(doc(db, "sessions", code, "answers", `${raceIndex}_${playerId}`), {
-    playerId, questionIndex: raceIndex, selected, timeMs, submittedAt: Date.now(),
-  }).catch(() => {});
-
-  const prevTotal = myScore?.total || 0;
-  const newTotal = prevTotal + points;
   try {
-    await setDoc(doc(db, "sessions", code, "scores", playerId), { total: newTotal, lastPoints: points, lastCorrect: correct }, { merge: true });
-  } catch { /* se a gravação falhar, a corrida segue mesmo assim */ }
-  myScore = { ...(myScore || {}), total: newTotal, lastPoints: points, lastCorrect: correct };
+    const timeMs = Date.now() - raceQuestionShownAt;
+    const selKey = [...selected].sort().join(",");
+    const corKey = [...(q.correct || [])].sort().join(",");
+    const correct = selKey === corKey && selKey !== "";
+    const points = correct ? kahootPoints(timeMs, q.timeLimit, q.pointsMultiplier || 1, !!s.precisionMode) : 0;
 
-  raceFeedback = { correct, points };
-  render();
-  setTimeout(() => {
-    raceFeedback = null;
-    raceIndex += 1;
-    raceSelected = [];
-    raceQuestionShownAt = Date.now();
+    await setDoc(doc(db, "sessions", code, "answers", `${raceIndex}_${playerId}`), {
+      playerId, questionIndex: raceIndex, selected, timeMs, submittedAt: Date.now(),
+    }).catch(() => {});
+
+    const prevTotal = myScore?.total || 0;
+    const newTotal = prevTotal + points;
+    await setDoc(doc(db, "sessions", code, "scores", playerId), { total: newTotal, lastPoints: points, lastCorrect: correct }, { merge: true });
+    myScore = { ...(myScore || {}), total: newTotal, lastPoints: points, lastCorrect: correct };
+
+    raceFeedback = { correct, points };
     render();
-  }, 900);
+    setTimeout(() => {
+      raceFeedback = null;
+      raceIndex += 1;
+      raceSelected = [];
+      raceQuestionShownAt = Date.now();
+      render();
+    }, 900);
+  } catch (err) {
+    console.error("Erro ao registrar resposta da corrida:", err);
+    alert("Não consegui registrar essa resposta. Confira sua internet e tenta de novo.");
+  }
 }
 
 /* ---------------- modo blefe ---------------- */
@@ -432,7 +460,12 @@ async function goToAvatarStep(inputCode, inputName) {
   if (!snap.exists()) return showJoinError("Não encontrei essa sala. Confira o código.");
   const s = snap.data();
   if (s.status === "ended") return showJoinError("Essa sala já foi encerrada.");
-  if (s.status !== "lobby" && !lateJoinAllowed(s.questions, s.currentIndex)) {
+  const isAsyncRace = s.gameMode === "corrida" && s.raceSubmode === "async";
+  if (isAsyncRace) {
+    if (s.status === "racing" && (s.raceWindowEndsAt || 0) <= Date.now()) {
+      return showJoinError("Essa corrida já fechou a janela de participação.");
+    }
+  } else if (s.status !== "lobby" && !lateJoinAllowed(s.questions, s.currentIndex)) {
     return showJoinError("Esse quiz já passou da metade — não dá mais pra entrar agora.");
   }
   joinSessionPreview = s;
@@ -455,7 +488,9 @@ async function joinRoom() {
   code = c; playerId = pid; playerName = nm;
   localStorage.setItem("quiz-player", JSON.stringify({ code, playerId, name: nm, avatar: avatarDraft, team: myTeam }));
   sessionData = snap.data();
+  mySelected = [];
   lastIndexAnswered = sessionData.status === "lobby" ? -1 : sessionData.currentIndex;
+  hasAnswered = false;
   if (sessionData.status === "question") {
     const ansSnap = await getDoc(doc(db, "sessions", code, "answers", `${sessionData.currentIndex}_${playerId}`));
     hasAnswered = ansSnap.exists();
@@ -498,6 +533,12 @@ async function leaveGame() {
   unsubScore && unsubScore();
   localStorage.removeItem("quiz-player");
   code = null; playerId = null; sessionData = null; myScore = null;
+  mySelected = []; hasAnswered = false; lastIndexAnswered = -1;
+  raceIndex = 0; raceSelected = []; raceFeedback = null; myRaceStartedAt = null;
+  bluffSubmitted = false; voteSubmitted = false; myBluffText = "";
+  readySubmitted = false; readyPhaseKey = null;
+  selectedTeam = null; myTeam = null;
+  avatarDraft = defaultAvatar();
   view = "join";
   render();
 }
@@ -632,7 +673,7 @@ function renderLookupPick(c, sess) {
     <div style="display:flex; flex-direction:column; gap:10px; margin-top:16px;">
       ${lookupCandidates.map((p, i) => `
         <button type="button" class="option-btn" style="background:var(--surface); color:var(--text); border:1.5px solid var(--surface-line);" data-i="${i}">
-          <span class="mini-avatar">${avatarSVG(p.avatar, 30)}</span>
+          ${p.avatar ? `<span class="mini-avatar">${avatarSVG(p.avatar, 30)}</span>` : ""}
           <span>${escapeHtml(p.name)}</span>
         </button>
       `).join("")}
@@ -705,11 +746,13 @@ function renderEliminated() {
   root.innerHTML = `
     <div class="big-emoji">👋</div>
     <h1 style="font-size:24px; margin-top:10px;">Você foi eliminado</h1>
-    <p style="color:var(--text-dim); margin-top:8px;">Modo Sobrevivência: quem erra sai do jogo. Fica de olho na tela pra ver quem ganha!</p>
-    ${myScore ? `<div style="color:var(--text-dim); margin-top:14px;">Sua pontuação final: <b style="color:var(--text);">${myScore.total}</b></div>` : ""}
-    <button class="btn-link" id="leave-btn" style="margin-top:20px;">sair da sala</button>
+    <p style="color:var(--text-dim); margin-top:8px;">Modo Sobrevivência: quem erra sai do jogo. Continue nessa tela — assim que o jogo acabar pra todo mundo, você vai ver o resultado final automaticamente.</p>
+    ${myScore ? `<div style="color:var(--text-dim); margin-top:14px;">Sua pontuação até aqui: <b style="color:var(--text);">${myScore.total}</b></div>` : ""}
+    <button class="btn btn-primary btn-block" id="pdf-btn-elim" style="margin-top:18px;">Baixar meu resultado em PDF</button>
+    <button class="btn-link" id="leave-btn" style="margin-top:14px;">sair da sala</button>
   `;
   document.getElementById("leave-btn").onclick = leaveGame;
+  document.getElementById("pdf-btn-elim").onclick = () => downloadMyReportPdf("pdf-btn-elim");
 }
 
 function renderTeamPicker() {
@@ -931,7 +974,7 @@ function renderLeaderboard() {
       ${list.map((p, i) => `
         <div class="rank-row ${(p.id === playerId || (myTeam && p.id === myTeam)) ? "me" : ""}">
           <span class="rank-num" style="color:${i === 0 ? "var(--gold)" : "var(--text-dim)"};">${i + 1}</span>
-          <span class="mini-avatar">${avatarSVG(p.avatar, 32)}</span>
+          ${p.avatar ? `<span class="mini-avatar">${avatarSVG(p.avatar, 32)}</span>` : ""}
           <span style="flex:1; font-weight:600;">${escapeHtml(p.name)}</span>
           <span style="color:var(--gold); font-weight:700;">${p.total}</span>
         </div>
@@ -961,16 +1004,16 @@ function renderEnd() {
     <button class="btn btn-primary btn-block" id="pdf-btn" style="margin-top:22px;">Baixar meu resultado em PDF</button>
     <button class="btn btn-ghost btn-block" id="leave-btn" style="margin-top:10px;">Voltar ao início</button>
   `;
-  document.getElementById("pdf-btn").onclick = downloadMyReportPdf;
+  document.getElementById("pdf-btn").onclick = () => downloadMyReportPdf();
   document.getElementById("leave-btn").onclick = goHome;
   localStorage.removeItem("quiz-player");
 }
 
-async function downloadMyReportPdf() {
+async function downloadMyReportPdf(btnId = "pdf-btn") {
   const jsPDF = getJsPDF();
   if (!jsPDF) return;
   const s = sessionData;
-  const btn = document.getElementById("pdf-btn");
+  const btn = document.getElementById(btnId);
   if (btn) { btn.disabled = true; btn.textContent = "Gerando PDF..."; }
 
   try {
