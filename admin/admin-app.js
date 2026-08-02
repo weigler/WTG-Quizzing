@@ -14,6 +14,7 @@ import { questionMaxPoints, nextQuestionScore, scoreQuestionSequence } from "../
 import { getJsPDF, addPdfHeader, addSectionTitle, AUTOTABLE_THEME } from "../shared/pdf-helpers.js";
 import { parseQuizText, IMPORT_TEMPLATE } from "../shared/import-parser.js";
 import { MUSIC_TRACKS, findTrack, SUGGESTED_SOURCES } from "../shared/music-tracks.js";
+import { buildLeaderboardRows, GAME_MODES } from "../shared/game-modes.js";
 
 const app = initializeApp(firebaseConfig);
 const auth = getAuth(app);
@@ -66,6 +67,7 @@ onAuthStateChanged(auth, (user) => {
     unsubQuizzes && unsubQuizzes();
     unsubSession && unsubSession();
     unsubPlayers && unsubPlayers();
+    unsubRaceScores && unsubRaceScores();
     unsubSessionsList && unsubSessionsList();
     quizzes = [];
     sessionsList = [];
@@ -93,11 +95,29 @@ document.getElementById("logout-btn").addEventListener("click", () => signOut(au
 const rid = () => Math.random().toString(36).slice(2, 10);
 const genCode = () => String(Math.floor(100000 + Math.random() * 900000));
 
+function shuffleArray(arr) {
+  const a = [...arr];
+  for (let i = a.length - 1; i > 0; i--) {
+    const j = Math.floor(Math.random() * (i + 1));
+    [a[i], a[j]] = [a[j], a[i]];
+  }
+  return a;
+}
+
+// Embaralha as opções de UMA pergunta, remapeando quais índices são
+// certos pra continuarem apontando pro texto certo depois da troca.
+function shuffleQuestionOptions(q) {
+  const order = shuffleArray(q.options.map((_, i) => i));
+  const options = order.map((i) => q.options[i]);
+  const correct = q.correct.map((oldIdx) => order.indexOf(oldIdx));
+  return { ...q, options, correct };
+}
+
 function emptyQuestion(timeLimit = 20, image = null) {
   return { id: rid(), text: "", type: "single", options: ["", ""], correct: [], timeLimit, pointsMultiplier: 1, imageUrl: image?.url || null, imageCredit: image?.credit || null };
 }
 function emptyQuiz() {
-  return { id: null, title: "", theme: "", coverImage: null, coverCredit: null, defaultTimeLimit: 20, musicUrl: null, precisionMode: false, comboMode: false, questions: [] };
+  return { id: null, title: "", theme: "", coverImage: null, coverCredit: null, defaultTimeLimit: 20, musicUrl: null, precisionMode: false, comboMode: false, shuffleQuestions: false, shuffleAnswers: false, gameMode: "classico", teamMode: false, teams: ["Time Azul", "Time Vermelho"], questions: [] };
 }
 
 function subscribeQuizzes() {
@@ -216,6 +236,11 @@ async function duplicateQuiz(q) {
     musicUrl: copy.musicUrl || null,
     precisionMode: !!copy.precisionMode,
     comboMode: !!copy.comboMode,
+    shuffleQuestions: !!copy.shuffleQuestions,
+    gameMode: copy.gameMode || "classico",
+    teamMode: !!copy.teamMode,
+    teams: copy.teams || [],
+    shuffleAnswers: !!copy.shuffleAnswers,
     questions: copy.questions,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
@@ -234,15 +259,24 @@ async function launchSession(quiz) {
     code = genCode();
     existing = await getDoc(doc(db, "sessions", code));
   }
+  let questions = JSON.parse(JSON.stringify(quiz.questions));
+  if (quiz.shuffleQuestions) questions = shuffleArray(questions);
+  if (quiz.shuffleAnswers) questions = questions.map(shuffleQuestionOptions);
   const session = {
     quizId: quiz.id,
     title: quiz.title,
     ownerId: currentUser.uid,
     status: "lobby",
-    questions: quiz.questions,
+    questions,
     musicUrl: quiz.musicUrl || null,
     precisionMode: !!quiz.precisionMode,
     comboMode: !!quiz.comboMode,
+    gameMode: quiz.gameMode || "classico",
+    teamMode: !!quiz.teamMode && quiz.gameMode !== "cooperativo" && quiz.gameMode !== "corrida",
+    teams: quiz.teams || [],
+    eliminatedPlayerIds: [],
+    raceDurationSec: questions.reduce((sum, q) => sum + (q.timeLimit || 20), 0),
+    raceStartedAt: null,
     currentIndex: -1,
     questionStartedAt: null,
     createdAt: serverTimestamp(),
@@ -299,10 +333,44 @@ function renderEditor() {
       <span><b style="color:var(--text);">Modo de Precisão</b> — pontuação só pelo acerto (1000 pontos fixos), sem contar velocidade</span>
     </label>
 
-    <label style="display:flex; align-items:center; gap:8px; margin-bottom:20px; font-size:13px; color:var(--text-dim); cursor:pointer;">
+    <label style="display:flex; align-items:center; gap:8px; margin-bottom:10px; font-size:13px; color:var(--text-dim); cursor:pointer;">
       <input type="checkbox" id="quiz-combo" ${q.comboMode ? "checked" : ""} />
       <span><b style="color:var(--text);">Modo Combo</b> — acertar perguntas seguidas acumula um bônus extra de pontos (desligado por padrão)</span>
     </label>
+
+    <label style="display:flex; align-items:center; gap:8px; margin-bottom:10px; font-size:13px; color:var(--text-dim); cursor:pointer;">
+      <input type="checkbox" id="quiz-shuffle-questions" ${q.shuffleQuestions ? "checked" : ""} />
+      <span><b style="color:var(--text);">Embaralhar perguntas</b> — sorteia uma ordem diferente toda vez que a sala é aberta</span>
+    </label>
+
+    <label style="display:flex; align-items:center; gap:8px; margin-bottom:20px; font-size:13px; color:var(--text-dim); cursor:pointer;">
+      <input type="checkbox" id="quiz-shuffle-answers" ${q.shuffleAnswers ? "checked" : ""} />
+      <span><b style="color:var(--text);">Embaralhar respostas</b> — sorteia a ordem das opções de cada pergunta toda vez que a sala é aberta</span>
+    </label>
+
+    <div style="margin-bottom:14px;">
+      <label style="font-size:13px; color:var(--text-dim);">Modo de jogo</label>
+      <select class="input" id="quiz-gamemode" style="margin-top:6px;">
+        ${GAME_MODES.map((m) => `<option value="${m.id}" ${q.gameMode === m.id ? "selected" : ""}>${m.label}</option>`).join("")}
+      </select>
+      <div style="font-size:11px; color:var(--text-dim); margin-top:6px;" id="gamemode-hint"></div>
+    </div>
+
+    <div id="team-config" style="display:${q.gameMode === "cooperativo" || q.gameMode === "corrida" ? "none" : "block"}; margin-bottom:20px;">
+      <label style="display:flex; align-items:center; gap:8px; margin-bottom:8px; font-size:13px; color:var(--text-dim); cursor:pointer;">
+        <input type="checkbox" id="quiz-teammode" ${q.teamMode ? "checked" : ""} />
+        <span><b style="color:var(--text);">Modo Equipes</b> — jogadores escolhem um time ao entrar, placar soma por equipe</span>
+      </label>
+      <div id="team-names" style="display:${q.teamMode ? "flex" : "none"}; flex-direction:column; gap:6px; margin-left:26px;">
+        ${(q.teams || []).map((t, i) => `
+          <div style="display:flex; gap:6px;">
+            <input class="input" data-team="${i}" value="${escapeAttr(t)}" maxlength="24" placeholder="Nome do time" style="flex:1;" />
+            ${(q.teams || []).length > 2 ? `<button type="button" class="btn-link" data-team-remove="${i}">✕</button>` : ""}
+          </div>
+        `).join("")}
+        ${(q.teams || []).length < 6 ? `<button type="button" class="btn-link" id="team-add" style="align-self:flex-start;">+ adicionar time</button>` : ""}
+      </div>
+    </div>
 
     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
       <div style="font-weight:700; font-family:var(--font-display);">Perguntas</div>
@@ -352,6 +420,36 @@ function renderEditor() {
   document.getElementById("music-test-btn").onclick = () => testMusic(document.getElementById("quiz-music").value.trim());
   document.getElementById("quiz-precision").onchange = (e) => (q.precisionMode = e.target.checked);
   document.getElementById("quiz-combo").onchange = (e) => (q.comboMode = e.target.checked);
+  document.getElementById("quiz-shuffle-questions").onchange = (e) => (q.shuffleQuestions = e.target.checked);
+  document.getElementById("quiz-shuffle-answers").onchange = (e) => (q.shuffleAnswers = e.target.checked);
+
+  const gamemodeHints = {
+    classico: "Ritmo normal: pergunta, revelação, placar, próxima.",
+    sobrevivencia: "Quem responde errado é eliminado e vira espectador — o jogo segue até sobrar pouca gente. Se todo mundo erraria na mesma rodada, ninguém é eliminado dessa vez.",
+    cooperativo: "Não tem ranking individual — todo mundo soma pra um placar coletivo só.",
+    corrida: "Sem revelação entre perguntas: cada jogador responde a próxima pergunta assim que termina a atual, no seu próprio ritmo, até o tempo total acabar.",
+  };
+  const updateGamemodeHint = () => { document.getElementById("gamemode-hint").textContent = gamemodeHints[q.gameMode] || ""; };
+  updateGamemodeHint();
+  document.getElementById("quiz-gamemode").onchange = (e) => {
+    q.gameMode = e.target.value;
+    if (q.gameMode === "cooperativo" || q.gameMode === "corrida") q.teamMode = false;
+    renderEditor();
+  };
+  document.getElementById("quiz-teammode")?.addEventListener("change", (e) => {
+    q.teamMode = e.target.checked;
+    document.getElementById("team-names").style.display = q.teamMode ? "flex" : "none";
+  });
+  document.querySelectorAll("[data-team]").forEach((input) => {
+    input.oninput = (e) => { q.teams[Number(input.dataset.team)] = e.target.value; };
+  });
+  document.querySelectorAll("[data-team-remove]").forEach((btn) => {
+    btn.onclick = () => { q.teams.splice(Number(btn.dataset.teamRemove), 1); renderEditor(); };
+  });
+  document.getElementById("team-add")?.addEventListener("click", () => {
+    q.teams.push(`Time ${q.teams.length + 1}`);
+    renderEditor();
+  });
 
   renderQuestionList();
   if (!questionDraft) questionDraft = emptyQuestion(q.defaultTimeLimit || 20, quizDraft.defaultQuestionImage);
@@ -606,7 +704,7 @@ async function saveQuiz() {
   if (!q.title.trim()) return (errEl.textContent = "Dê um título ao quiz.");
   if (q.questions.length === 0) return (errEl.textContent = "Adicione ao menos uma pergunta.");
   errEl.textContent = "";
-  const payload = { title: q.title.trim(), theme: q.theme.trim(), coverImage: q.coverImage, coverCredit: q.coverCredit, defaultTimeLimit: q.defaultTimeLimit || 20, musicUrl: q.musicUrl || null, precisionMode: !!q.precisionMode, comboMode: !!q.comboMode, questions: q.questions, updatedAt: serverTimestamp() };
+  const payload = { title: q.title.trim(), theme: q.theme.trim(), coverImage: q.coverImage, coverCredit: q.coverCredit, defaultTimeLimit: q.defaultTimeLimit || 20, musicUrl: q.musicUrl || null, precisionMode: !!q.precisionMode, comboMode: !!q.comboMode, shuffleQuestions: !!q.shuffleQuestions, shuffleAnswers: !!q.shuffleAnswers, gameMode: q.gameMode || "classico", teamMode: !!q.teamMode, teams: q.teams || [], questions: q.questions, updatedAt: serverTimestamp() };
   if (q.id) {
     await updateDoc(doc(db, "quizzes", q.id), payload);
   } else {
@@ -820,6 +918,7 @@ function openControl(code) {
   view = "control";
   unsubSession && unsubSession();
   unsubPlayers && unsubPlayers();
+    unsubRaceScores && unsubRaceScores();
   unsubSession = onSnapshot(doc(db, "sessions", code), (snap) => {
     sessionData = snap.data();
     if (view === "control") render();
@@ -829,6 +928,7 @@ function openControl(code) {
     snap.forEach((d) => (sessionPlayers[d.id] = d.data()));
     if (view === "control" && sessionData?.status === "lobby") render();
   });
+  subscribeRaceScores(code);
 }
 
 function renderControl() {
@@ -838,6 +938,7 @@ function renderControl() {
   if (s.status === "question") return renderQuestionLive();
   if (s.status === "reveal") return renderReveal();
   if (s.status === "leaderboard") return renderLeaderboard();
+  if (s.status === "racing") return renderRaceControl();
   if (s.status === "ended") return renderEnded();
 }
 
@@ -870,11 +971,11 @@ function renderLobby() {
         `).join("") || `<span style="color:var(--text-dim); font-size:13px;">Aguardando entrarem...</span>`}
       </div>
     </div>
-    <button class="btn btn-primary btn-block" id="begin-btn" style="margin-top:22px;" ${playerEntries.length === 0 ? "disabled" : ""}>Começar jogo →</button>
+    <button class="btn btn-primary btn-block" id="begin-btn" style="margin-top:22px;" ${playerEntries.length === 0 ? "disabled" : ""}>${sessionData.gameMode === "corrida" ? "Começar corrida →" : "Começar jogo →"}</button>
     <button class="btn btn-ghost btn-block" id="cancel-session-btn" style="margin-top:10px;">Cancelar e excluir esta sala</button>
   `;
-  document.getElementById("control-back").onclick = () => { view = "list"; unsubSession(); unsubPlayers(); render(); };
-  document.getElementById("begin-btn").onclick = beginGame;
+  document.getElementById("control-back").onclick = () => { view = "list"; unsubSession(); unsubPlayers(); unsubRaceScores && unsubRaceScores(); render(); };
+  document.getElementById("begin-btn").onclick = sessionData.gameMode === "corrida" ? beginRace : beginGame;
   document.getElementById("cancel-session-btn").onclick = async () => {
     await deleteSession(sessionCode, { fromControl: true });
   };
@@ -920,6 +1021,67 @@ async function beginGame() {
   await updateDoc(doc(db, "sessions", sessionCode), { status: "question", currentIndex: 0, questionStartedAt: Date.now() });
 }
 
+/* ---------------- corrida livre ---------------- */
+let raceControlInt = null;
+let unsubRaceScores = null;
+let raceScoresCache = {};
+
+function subscribeRaceScores(code) {
+  unsubRaceScores && unsubRaceScores();
+  unsubRaceScores = onSnapshot(collection(db, "sessions", code, "scores"), (snap) => {
+    raceScoresCache = {};
+    snap.forEach((d) => (raceScoresCache[d.id] = d.data().total || 0));
+    if (view === "control" && sessionData?.status === "racing") render();
+  });
+}
+
+async function beginRace() {
+  await updateDoc(doc(db, "sessions", sessionCode), { status: "racing", raceStartedAt: Date.now() });
+}
+
+function renderRaceControl() {
+  clearInterval(raceControlInt);
+  const s = sessionData;
+  const rows = buildLeaderboardRows({ gameMode: s.gameMode, teamMode: s.teamMode, players: sessionPlayers, totals: raceScoresCache }).slice(0, 8);
+  root.innerHTML = `
+    <div class="eyebrow" style="text-align:center;">corrida em andamento</div>
+    <div class="timer-ring" id="race-timer-ring"><span id="race-timer-num">--</span></div>
+    <div style="margin-top:20px;">
+      ${rows.map((p, i) => `
+        <div class="rank-row">
+          <span class="rank-num" style="color:${i === 0 ? "var(--gold)" : "var(--text-dim)"};">${i + 1}</span>
+          ${p.avatar ? `<span class="mini-avatar">${avatarSVG(p.avatar, 30)}</span>` : ""}
+          <span style="flex:1; font-weight:600;">${escapeHtml(p.name)}</span>
+          <span style="color:var(--gold); font-weight:700;">${p.total}</span>
+        </div>
+      `).join("") || `<div style="color:var(--text-dim); font-size:13px;">Aguardando o pessoal responder...</div>`}
+    </div>
+    <button class="btn btn-primary btn-block" id="end-race-btn" style="margin-top:18px;">Encerrar corrida agora</button>
+  `;
+  document.getElementById("end-race-btn").onclick = endRace;
+
+  const draw = () => {
+    const elapsed = (Date.now() - (s.raceStartedAt || Date.now())) / 1000;
+    const remaining = Math.max(0, Math.ceil((s.raceDurationSec || 0) - elapsed));
+    const num = document.getElementById("race-timer-num");
+    const ring = document.getElementById("race-timer-ring");
+    if (num) num.textContent = remaining;
+    if (ring) ring.classList.toggle("low", remaining <= 10);
+    if (remaining <= 0) { clearInterval(raceControlInt); endRace(); }
+  };
+  draw();
+  raceControlInt = setInterval(draw, 1000);
+}
+
+async function endRace() {
+  clearInterval(raceControlInt);
+  const scoresSnap = await getDocs(collection(db, "sessions", sessionCode, "scores"));
+  const totals = {};
+  scoresSnap.forEach((d) => (totals[d.id] = d.data().total || 0));
+  const final = buildLeaderboardRows({ gameMode: sessionData.gameMode, teamMode: sessionData.teamMode, players: sessionPlayers, totals });
+  await updateDoc(doc(db, "sessions", sessionCode), { status: "ended", finalLeaderboard: final });
+}
+
 let liveTimerInt = null;
 function renderQuestionLive() {
   clearInterval(liveTimerInt);
@@ -960,12 +1122,15 @@ function pollAnsweredCount() {
   clearInterval(answeredPollInt);
   autoRevealed = false;
   const tick = async () => {
-    const total = Object.keys(sessionPlayers).length;
+    const eliminated = new Set(sessionData.eliminatedPlayerIds || []);
+    const activeIds = Object.keys(sessionPlayers).filter((pid) => !eliminated.has(pid));
+    const total = activeIds.length;
     const q = query(collection(db, "sessions", sessionCode, "answers"), where("questionIndex", "==", sessionData.currentIndex));
     const snap = await getDocs(q);
+    const answeredActive = snap.docs.filter((d) => activeIds.includes(d.data().playerId)).length;
     const el = document.getElementById("answered-count");
-    if (el) el.textContent = `${snap.size} de ${total} responderam`;
-    if (!autoRevealed && total > 0 && snap.size >= total) {
+    if (el) el.textContent = `${answeredActive} de ${total} responderam`;
+    if (!autoRevealed && total > 0 && answeredActive >= total) {
       autoRevealed = true;
       revealAnswers();
     }
@@ -987,8 +1152,13 @@ async function revealAnswers() {
 
   const stats = new Array(q.options.length).fill(0);
   const writes = [];
+  const isSurvival = s.gameMode === "sobrevivencia";
+  const eliminatedBefore = new Set(s.eliminatedPlayerIds || []);
+  const newlyWrong = [];
 
   for (const pid of Object.keys(sessionPlayers)) {
+    if (isSurvival && eliminatedBefore.has(pid)) continue; // já estava fora, não pontua nem erra de novo
+
     const prevScoreSnap = await getDoc(doc(db, "sessions", sessionCode, "scores", pid));
     const prevData = prevScoreSnap.exists() ? prevScoreSnap.data() : {};
     const prevTotal = prevData.total || 0;
@@ -1001,6 +1171,7 @@ async function revealAnswers() {
       const cor = [...q.correct].sort().join(",");
       correct = sel === cor && sel !== "";
     }
+    if (isSurvival && !correct) newlyWrong.push(pid);
     const { points: pts, newStreak, combo, bonus } = nextQuestionScore({
       prevStreak,
       correct,
@@ -1016,7 +1187,17 @@ async function revealAnswers() {
   }
   await Promise.all(writes);
   revealStats = stats;
-  await updateDoc(doc(db, "sessions", sessionCode), { status: "reveal" });
+
+  const sessionUpdate = { status: "reveal" };
+  if (isSurvival && newlyWrong.length) {
+    const remainingBefore = Object.keys(sessionPlayers).length - eliminatedBefore.size;
+    // salvaguarda: se todo mundo que ainda restava errou junto, ninguém é
+    // eliminado dessa vez (senão o jogo acabaria sem ninguém)
+    if (remainingBefore - newlyWrong.length >= 1) {
+      sessionUpdate.eliminatedPlayerIds = [...eliminatedBefore, ...newlyWrong];
+    }
+  }
+  await updateDoc(doc(db, "sessions", sessionCode), sessionUpdate);
 }
 
 function renderReveal() {
@@ -1047,10 +1228,9 @@ function renderReveal() {
 
 async function showLeaderboard() {
   const scoresSnap = await getDocs(collection(db, "sessions", sessionCode, "scores"));
-  const top = scoresSnap.docs
-    .map((d) => ({ id: d.id, name: sessionPlayers[d.id]?.name || "?", avatar: sessionPlayers[d.id]?.avatar, total: d.data().total || 0 }))
-    .sort((a, b) => b.total - a.total)
-    .slice(0, 8);
+  const totals = {};
+  scoresSnap.docs.forEach((d) => (totals[d.id] = d.data().total || 0));
+  const top = buildLeaderboardRows({ gameMode: sessionData.gameMode, teamMode: sessionData.teamMode, players: sessionPlayers, totals });
   await updateDoc(doc(db, "sessions", sessionCode), { status: "leaderboard", leaderboardTop: top });
 }
 
@@ -1094,9 +1274,9 @@ async function nextQuestion() {
   const nextIdx = s.currentIndex + 1;
   if (nextIdx >= s.questions.length) {
     const scoresSnap = await getDocs(collection(db, "sessions", sessionCode, "scores"));
-    const final = scoresSnap.docs
-      .map((d) => ({ id: d.id, name: sessionPlayers[d.id]?.name || "?", avatar: sessionPlayers[d.id]?.avatar, total: d.data().total || 0 }))
-      .sort((a, b) => b.total - a.total);
+    const totals = {};
+    scoresSnap.docs.forEach((d) => (totals[d.id] = d.data().total || 0));
+    const final = buildLeaderboardRows({ gameMode: s.gameMode, teamMode: s.teamMode, players: sessionPlayers, totals });
     await updateDoc(doc(db, "sessions", sessionCode), { status: "ended", finalLeaderboard: final });
     return;
   }
@@ -1127,6 +1307,7 @@ function renderEnded() {
   document.getElementById("finish-btn").onclick = () => {
     unsubSession && unsubSession();
     unsubPlayers && unsubPlayers();
+    unsubRaceScores && unsubRaceScores();
     view = "list";
     render();
   };
@@ -1257,6 +1438,7 @@ async function deleteSession(code, opts = {}) {
   if (opts.fromControl) {
     unsubSession && unsubSession();
     unsubPlayers && unsubPlayers();
+    unsubRaceScores && unsubRaceScores();
     view = "sessions";
     subscribeSessionsList();
   }

@@ -55,9 +55,13 @@ service cloud.firestore {
 
       match /scores/{playerId} {
         allow read: if true; // o jogador precisa ver a própria pontuação
-        // só o dono da sessão grava pontos
-        allow write: if request.auth != null
-                     && get(/databases/$(database)/documents/sessions/$(code)).data.ownerId == request.auth.uid;
+        // normalmente só o dono da sessão grava pontos (ele corrige cada
+        // pergunta) — MAS no modo "corrida livre" não tem correção
+        // centralizada, cada jogador avança sozinho, então o próprio
+        // jogador grava a própria pontuação nesse modo específico
+        allow write: if (request.auth != null
+                         && get(/databases/$(database)/documents/sessions/$(code)).data.ownerId == request.auth.uid)
+                     || get(/databases/$(database)/documents/sessions/$(code)).data.gameMode == "corrida";
       }
     }
   }

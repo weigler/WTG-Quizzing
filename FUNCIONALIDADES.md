@@ -40,12 +40,34 @@ podem ser duplicados com um clique. Perguntas e opções de resposta também
 podem ser reordenadas (setinhas ▲▼) sem precisar recriar nada — a
 marcação de "certa" viaja junto quando uma opção muda de posição.
 
+### Embaralhar
+Dois interruptores independentes no quiz: **embaralhar perguntas**
+(sorteia uma ordem diferente cada vez que a sala é aberta) e **embaralhar
+respostas** (sorteia a ordem das opções de cada pergunta também a cada
+sala nova). Os dois vêm desligados por padrão. Úteis pra quem costuma
+jogar o mesmo quiz mais de uma vez — dificulta decorar a posição das
+respostas de uma partida pra outra.
+
 ### Trilha sonora
 Cada quiz pode ter uma música de fundo: escolha entre faixas prontas
 (gratuitas) ou cole o link direto de qualquer outro arquivo de áudio
 (.mp3/.ogg) — com botão pra testar na hora, antes de salvar. Toca na tela
 de quem está controlando o jogo (não no celular de cada jogador, pra não
 virar uma bagunça de sons), com botão pra silenciar a qualquer momento.
+
+### Modos de jogo
+Além do modo clássico (pergunta → revelação → placar → próxima), o quiz
+pode ser configurado em:
+- **Sobrevivência** — quem responde errado é eliminado e vira espectador;
+  o jogo segue até sobrar pouca gente (se todo mundo erraria junto,
+  ninguém é eliminado naquela rodada, pra sempre sobrar alguém).
+- **Equipes** — jogadores escolhem um time ao entrar (nomes definidos por
+  você); o placar passa a somar por equipe em vez de individual.
+- **Cooperativo** — sem ranking individual: todo mundo soma pra um placar
+  coletivo único, sem competição entre os jogadores.
+- **Corrida livre** — sem pausa pra revelação entre perguntas: cada
+  jogador avança sozinho, no seu próprio ritmo, dentro de um tempo total
+  compartilhado; o placar atualiza ao vivo pra quem está controlando.
 
 ### Cadastro de quizzes
 Dá pra criar quantos quizzes quiser, com temas diferentes — um sobre um

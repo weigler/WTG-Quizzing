@@ -32,6 +32,13 @@ let lastIndexAnswered = -1;
 let unsubSession = null;
 let unsubScore = null;
 let liveTimerInt = null;
+let joinSessionPreview = null;
+let selectedTeam = null;
+let myTeam = null;
+let raceIndex = 0;
+let raceSelected = [];
+let raceQuestionShownAt = 0;
+let raceFeedback = null;
 
 /* tenta retomar sessão salva no navegador (se a pessoa recarregar a página) —
    mas só se aquela sessão ainda existir e não tiver acabado; caso
@@ -40,6 +47,7 @@ function viewForStatus(status) {
   if (status === "question") return "question";
   if (status === "reveal") return "reveal";
   if (status === "leaderboard") return "leaderboard";
+  if (status === "racing") return "race";
   if (status === "ended") return "end";
   return "wait";
 }
@@ -60,12 +68,14 @@ async function boot() {
       if (snap.exists() && snap.data().status !== "ended") {
         code = saved.code; playerId = saved.playerId; playerName = saved.name;
         if (saved.avatar) avatarDraft = saved.avatar;
+        if (saved.team) myTeam = saved.team;
         sessionData = snap.data();
         lastIndexAnswered = sessionData.status === "lobby" ? -1 : sessionData.currentIndex;
         if (sessionData.status === "question") {
           const ansSnap = await getDoc(doc(db, "sessions", code, "answers", `${sessionData.currentIndex}_${playerId}`));
           hasAnswered = ansSnap.exists();
         }
+        if (sessionData.status === "racing") startRace();
         view = viewForStatus(sessionData.status);
         subscribeSession();
         render();
@@ -143,10 +153,130 @@ function reactToStatus() {
   }
   if (s.status === "reveal") { view = "reveal"; return; }
   if (s.status === "leaderboard") { view = "leaderboard"; return; }
+  if (s.status === "racing") {
+    if (view !== "race") startRace();
+    view = "race";
+    return;
+  }
   if (s.status === "lobby") view = "wait";
 }
 
+/* ---------------- corrida livre ---------------- */
+
+function startRace() {
+  raceIndex = 0;
+  raceSelected = [];
+  raceQuestionShownAt = Date.now();
+  raceFeedback = null;
+}
+
+function renderRace() {
+  const s = sessionData;
+  root.className = "container left";
+  const totalElapsed = (Date.now() - (s.raceStartedAt || Date.now())) / 1000;
+  const remaining = Math.max(0, Math.ceil((s.raceDurationSec || 0) - totalElapsed));
+
+  if (remaining <= 0 || raceIndex >= s.questions.length) {
+    root.className = "container";
+    root.innerHTML = `
+      <div class="eyebrow">corrida</div>
+      <h1 style="font-size:22px; margin-top:8px;">${raceIndex >= s.questions.length ? "Você terminou! 🏁" : "Tempo esgotado!"}</h1>
+      <p style="color:var(--text-dim); margin-top:8px;">Aguardando o fim da corrida pra todo mundo...</p>
+      <div style="color:var(--gold); font-weight:700; margin-top:14px;">Total: ${myScore?.total ?? 0} pontos</div>
+    `;
+    return;
+  }
+
+  if (raceFeedback) {
+    root.className = "container";
+    root.innerHTML = `
+      <div class="big-emoji">${raceFeedback.correct ? "✅" : "❌"}</div>
+      <div style="color:var(--gold); font-weight:700; margin-top:6px; font-size:18px;">${raceFeedback.correct ? `+${raceFeedback.points}` : "0"} pontos</div>
+    `;
+    return;
+  }
+
+  const q = s.questions[raceIndex];
+  root.innerHTML = `
+    <div class="eyebrow">pergunta ${raceIndex + 1} de ${s.questions.length} · ${remaining}s restantes na corrida</div>
+    ${q.imageUrl ? `<img class="q-image" src="${q.imageUrl}" style="margin-top:12px;" />` : ""}
+    <h2 style="font-size:19px; margin:10px 0 14px;">${escapeHtml(q.text)}</h2>
+    <div style="display:flex; flex-direction:column; gap:10px;" id="race-options"></div>
+    ${q.type === "multiple" ? `<button class="btn btn-primary btn-block" id="race-confirm" style="margin-top:16px;" disabled>Confirmar resposta</button>` : ""}
+  `;
+
+  const optsEl = document.getElementById("race-options");
+  optsEl.innerHTML = q.options.map((opt, i) => `
+    <button type="button" class="option-btn ${OPTION_COLORS[i % 6]}" data-i="${i}" data-selected="false">
+      <span class="${OPTION_SHAPES[i % 6]}"></span><span>${escapeHtml(opt)}</span>
+    </button>
+  `).join("");
+  optsEl.querySelectorAll("button").forEach((btn) => {
+    btn.onclick = () => {
+      const i = Number(btn.dataset.i);
+      if (q.type === "multiple") {
+        const idx = raceSelected.indexOf(i);
+        if (idx >= 0) raceSelected.splice(idx, 1); else raceSelected.push(i);
+        btn.dataset.selected = raceSelected.includes(i) ? "true" : "false";
+        document.getElementById("race-confirm").disabled = raceSelected.length === 0;
+      } else {
+        submitRaceAnswer([i]);
+      }
+    };
+  });
+  document.getElementById("race-confirm")?.addEventListener("click", () => submitRaceAnswer());
+
+  liveTimerInt = setInterval(() => {
+    if (view !== "race" || raceFeedback) return;
+    const el = (Date.now() - (s.raceStartedAt || Date.now())) / 1000;
+    const rem = Math.max(0, Math.ceil((s.raceDurationSec || 0) - el));
+    if (rem <= 0) render();
+  }, 1000);
+}
+
+// No modo corrida não tem admin corrigindo pergunta por pergunta — cada
+// jogador já sabe na hora se acertou (a resposta certa já está visível
+// no próprio quiz que ele recebeu) e grava a própria pontuação. É um modo
+// pensado pra brincadeiras casuais, não pra prova de vestibular: dá pra
+// alguém adulterar a própria pontuação mexendo direto no banco. As
+// regras do Firestore só liberam essa gravação quando o quiz está
+// mesmo configurado como corrida.
+async function submitRaceAnswer(sel) {
+  const s = sessionData;
+  const q = s.questions[raceIndex];
+  const selected = sel || raceSelected;
+  if (selected.length === 0) return;
+
+  const timeMs = Date.now() - raceQuestionShownAt;
+  const selKey = [...selected].sort().join(",");
+  const corKey = [...(q.correct || [])].sort().join(",");
+  const correct = selKey === corKey && selKey !== "";
+  const points = correct ? kahootPoints(timeMs, q.timeLimit, q.pointsMultiplier || 1, !!s.precisionMode) : 0;
+
+  await setDoc(doc(db, "sessions", code, "answers", `${raceIndex}_${playerId}`), {
+    playerId, questionIndex: raceIndex, selected, timeMs, submittedAt: Date.now(),
+  }).catch(() => {});
+
+  const prevTotal = myScore?.total || 0;
+  const newTotal = prevTotal + points;
+  try {
+    await setDoc(doc(db, "sessions", code, "scores", playerId), { total: newTotal, lastPoints: points, lastCorrect: correct }, { merge: true });
+  } catch { /* se a gravação falhar, a corrida segue mesmo assim */ }
+  myScore = { ...(myScore || {}), total: newTotal, lastPoints: points, lastCorrect: correct };
+
+  raceFeedback = { correct, points };
+  render();
+  setTimeout(() => {
+    raceFeedback = null;
+    raceIndex += 1;
+    raceSelected = [];
+    raceQuestionShownAt = Date.now();
+    render();
+  }, 900);
+}
+
 /* ---------------- ações ---------------- */
+
 async function goToAvatarStep(inputCode, inputName) {
   const c = inputCode.trim();
   const nm = inputName.trim();
@@ -159,6 +289,8 @@ async function goToAvatarStep(inputCode, inputName) {
   if (s.status !== "lobby" && !lateJoinAllowed(s.questions, s.currentIndex)) {
     return showJoinError("Esse quiz já passou da metade — não dá mais pra entrar agora.");
   }
+  joinSessionPreview = s;
+  selectedTeam = s.teamMode && s.teams?.length ? s.teams[0] : null;
   joinCodeValue = c;
   joinNameValue = nm;
   view = "avatar";
@@ -169,16 +301,20 @@ async function joinRoom() {
   const c = joinCodeValue;
   const nm = joinNameValue;
   const pid = rid();
-  await setDoc(doc(db, "sessions", c, "players", pid), { name: nm, avatar: avatarDraft, joinedAt: Date.now() });
+  const playerDoc = { name: nm, avatar: avatarDraft, joinedAt: Date.now() };
+  if (selectedTeam) playerDoc.team = selectedTeam;
+  myTeam = selectedTeam;
+  await setDoc(doc(db, "sessions", c, "players", pid), playerDoc);
   const snap = await getDoc(doc(db, "sessions", c));
   code = c; playerId = pid; playerName = nm;
-  localStorage.setItem("quiz-player", JSON.stringify({ code, playerId, name: nm, avatar: avatarDraft }));
+  localStorage.setItem("quiz-player", JSON.stringify({ code, playerId, name: nm, avatar: avatarDraft, team: myTeam }));
   sessionData = snap.data();
   lastIndexAnswered = sessionData.status === "lobby" ? -1 : sessionData.currentIndex;
   if (sessionData.status === "question") {
     const ansSnap = await getDoc(doc(db, "sessions", code, "answers", `${sessionData.currentIndex}_${playerId}`));
     hasAnswered = ansSnap.exists();
   }
+  if (sessionData.status === "racing") startRace();
   view = viewForStatus(sessionData.status);
   subscribeSession();
   render();
@@ -241,8 +377,13 @@ function render() {
     if (view === "join") return renderJoin();
     if (view === "lookup") return renderLookup();
     if (view === "avatar") return renderAvatarPicker();
+    if (view === "team") return renderTeamPicker();
     if (view === "wait") return renderWait();
+    if (["question", "reveal", "leaderboard"].includes(view) && sessionData?.gameMode === "sobrevivencia" && (sessionData.eliminatedPlayerIds || []).includes(playerId)) {
+      return renderEliminated();
+    }
     if (view === "question") return renderQuestion();
+    if (view === "race") return renderRace();
     if (view === "reveal") return renderReveal();
     if (view === "leaderboard") return renderLeaderboard();
     if (view === "end") return renderEnd();
@@ -363,6 +504,7 @@ async function openLookupResult(c, sess, pid, playerData) {
   playerId = pid;
   playerName = playerData.name;
   avatarDraft = playerData.avatar || defaultAvatar();
+  myTeam = playerData.team || null;
   sessionData = sess;
   const scoreSnap = await getDoc(doc(db, "sessions", c, "scores", pid));
   myScore = scoreSnap.exists() ? scoreSnap.data() : null;
@@ -396,11 +538,49 @@ function renderAvatarPicker() {
   `;
   paintAvatarPicker();
   document.getElementById("avatar-back").onclick = () => { view = "join"; render(); };
-  document.getElementById("avatar-confirm").onclick = joinRoom;
+  document.getElementById("avatar-confirm").onclick = () => {
+    if (joinSessionPreview?.teamMode && joinSessionPreview.teams?.length) {
+      view = "team";
+      render();
+    } else {
+      joinRoom();
+    }
+  };
   document.querySelectorAll("#avatar-species [data-species]").forEach((b) => (b.onclick = () => { avatarDraft.species = b.dataset.species; paintAvatarPicker(); }));
   document.querySelectorAll("#avatar-colors [data-color]").forEach((b) => (b.onclick = () => { avatarDraft.color = b.dataset.color; paintAvatarPicker(); }));
   document.querySelectorAll("#avatar-hats [data-hat]").forEach((b) => (b.onclick = () => { avatarDraft.hat = b.dataset.hat; paintAvatarPicker(); }));
   document.querySelectorAll("#avatar-glasses [data-glasses]").forEach((b) => (b.onclick = () => { avatarDraft.glasses = b.dataset.glasses; paintAvatarPicker(); }));
+}
+
+function renderEliminated() {
+  root.innerHTML = `
+    <div class="big-emoji">👋</div>
+    <h1 style="font-size:24px; margin-top:10px;">Você foi eliminado</h1>
+    <p style="color:var(--text-dim); margin-top:8px;">Modo Sobrevivência: quem erra sai do jogo. Fica de olho na tela pra ver quem ganha!</p>
+    ${myScore ? `<div style="color:var(--text-dim); margin-top:14px;">Sua pontuação final: <b style="color:var(--text);">${myScore.total}</b></div>` : ""}
+    <button class="btn-link" id="leave-btn" style="margin-top:20px;">sair da sala</button>
+  `;
+  document.getElementById("leave-btn").onclick = leaveGame;
+}
+
+function renderTeamPicker() {
+  const teams = joinSessionPreview?.teams || [];
+  root.innerHTML = `
+    <div class="eyebrow">escolha seu time</div>
+    <h1 style="font-size:24px; margin-top:6px;">Você vai jogar por qual time?</h1>
+    <div style="display:flex; flex-direction:column; gap:10px; margin-top:20px;">
+      ${teams.map((t) => `
+        <button type="button" class="chip" data-team="${escapeHtml(t)}" style="padding:16px; font-size:15px; ${t === selectedTeam ? "border-color:var(--gold); color:var(--gold);" : ""}">🏳️ ${escapeHtml(t)}</button>
+      `).join("")}
+    </div>
+    <button class="btn btn-primary btn-block" id="team-confirm" style="margin-top:22px;">Entrar →</button>
+    <button class="btn-link" id="team-back" style="margin-top:10px;">← voltar</button>
+  `;
+  root.querySelectorAll("[data-team]").forEach((btn) => {
+    btn.onclick = () => { selectedTeam = btn.dataset.team; renderTeamPicker(); };
+  });
+  document.getElementById("team-confirm").onclick = joinRoom;
+  document.getElementById("team-back").onclick = () => { view = "avatar"; render(); };
 }
 
 function hatLabel(h) { return { none: "nenhum", cap: "boné", crown: "coroa", party: "festa", headband: "faixa", bow: "laço", flower: "flores", wizard: "mago", cowboy: "cowboy" }[h]; }
@@ -542,14 +722,14 @@ function renderReveal() {
 function renderLeaderboard() {
   const s = sessionData;
   const list = s.leaderboardTop || [];
-  const myRank = list.findIndex((p) => p.id === playerId);
+  const myRank = list.findIndex((p) => p.id === playerId || (myTeam && p.id === myTeam));
   root.className = "container left";
   root.innerHTML = `
     <div class="eyebrow" style="text-align:center;">placar</div>
     <h1 style="font-size:22px; text-align:center; margin-top:6px;">${myRank >= 0 ? `Você está em ${myRank + 1}º` : "Aguardando..."}</h1>
     <div style="margin-top:16px;">
       ${list.map((p, i) => `
-        <div class="rank-row ${p.id === playerId ? "me" : ""}">
+        <div class="rank-row ${(p.id === playerId || (myTeam && p.id === myTeam)) ? "me" : ""}">
           <span class="rank-num" style="color:${i === 0 ? "var(--gold)" : "var(--text-dim)"};">${i + 1}</span>
           <span class="mini-avatar">${avatarSVG(p.avatar, 32)}</span>
           <span style="flex:1; font-weight:600;">${escapeHtml(p.name)}</span>
@@ -569,7 +749,7 @@ function renderLeaderboard() {
 function renderEnd() {
   const s = sessionData;
   const final = s.finalLeaderboard || [];
-  const myRank = final.findIndex((p) => p.id === playerId);
+  const myRank = final.findIndex((p) => p.id === playerId || (myTeam && p.id === myTeam));
   root.innerHTML = `
     <div class="big-emoji">🏁</div>
     <h1 style="font-size:24px; margin-top:10px;">Fim de jogo!</h1>
@@ -620,7 +800,7 @@ async function downloadMyReportPdf() {
     });
 
     const final = s.finalLeaderboard || [];
-    const myRank = final.findIndex((p) => p.id === playerId);
+    const myRank = final.findIndex((p) => p.id === playerId || (myTeam && p.id === myTeam));
     const total = myRank >= 0 ? final[myRank].total : (myScore?.total ?? 0);
 
     const doc_ = new jsPDF();
