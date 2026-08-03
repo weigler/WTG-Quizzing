@@ -1,6 +1,16 @@
 #app-root { justify-content: center; align-items: center; text-align: center; }
 #app-root.left { align-items: stretch; text-align: left; }
 
+.choice-card {
+  display: block; text-align: left; text-decoration: none; background: var(--surface);
+  border: 1.5px solid var(--surface-line); border-radius: var(--radius-lg);
+  padding: 18px; width: 100%; transition: border-color .15s ease;
+  font-family: inherit; cursor: pointer;
+}
+.choice-card:hover { border-color: var(--gold); }
+.choice-card .big { font-family: var(--font-display); font-size: 16px; font-weight: 700; color: var(--text); }
+.choice-card .small { font-size: 13px; color: var(--text-dim); margin-top: 4px; }
+
 .q-image { width: 100%; max-height: 200px; object-fit: cover; border-radius: 14px; margin-bottom: 14px; }
 
 .q-image-slot {

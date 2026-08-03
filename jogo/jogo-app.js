@@ -105,6 +105,12 @@ async function boot() {
   if (codeFromUrl && /^\d{6}$/.test(codeFromUrl)) {
     joinCodeValue = codeFromUrl;
   }
+  // Veio pelo cartão "Ver resultados" da página inicial — pula a tela de
+  // código/nome e abre direto o hub de busca (resultado individual ou
+  // placar da sala inteira).
+  if (params.get("view") === "results") {
+    view = "resultshub";
+  }
   render();
 }
 
@@ -658,6 +664,7 @@ function render() {
     const isAsyncRace = view === "race" && sessionData?.raceSubmode === "async";
     updateMusicForRace(isAsyncRace ? sessionData : null);
     if (view === "join") return renderJoin();
+    if (view === "resultshub") return renderResultsHub();
     if (view === "lookup") return renderLookup();
     if (view === "roomresults") return renderRoomResults();
     if (view === "roomresultsview") return renderRoomResultsView();
@@ -695,15 +702,34 @@ function renderJoin() {
     <input class="input" id="join-name" placeholder="Seu nome" maxlength="20" style="margin-top:12px;" />
     <div id="join-error" class="error-text"></div>
     <button class="btn btn-primary btn-block" id="join-btn" style="margin-top:18px;">Entrar →</button>
-    <button class="btn-link" id="lookup-link" style="margin-top:16px;">já joguei — buscar meu resultado</button>
-    <button class="btn-link" id="room-results-link" style="margin-top:10px;">ver o placar final de uma sala</button>
   `;
   const codeInput = document.getElementById("join-code");
   codeInput.oninput = () => (codeInput.value = codeInput.value.replace(/\D/g, "").slice(0, 6));
   if (joinCodeValue) document.getElementById("join-name").focus();
   document.getElementById("join-btn").onclick = () => goToAvatarStep(codeInput.value, document.getElementById("join-name").value);
-  document.getElementById("lookup-link").onclick = () => { view = "lookup"; render(); };
-  document.getElementById("room-results-link").onclick = () => { view = "roomresults"; render(); };
+}
+
+/* ---------------- hub de resultados (chegado pelo cartão da página inicial) ---------------- */
+function renderResultsHub() {
+  root.innerHTML = `
+    <div class="eyebrow">quiz ao vivo</div>
+    <h1 style="font-size:24px; margin-top:6px;">Ver resultados</h1>
+    <p style="color:var(--text-dim); margin-top:6px; font-size:13px;">Escolha o que você quer ver — os dois só funcionam pra jogos que já terminaram.</p>
+
+    <button type="button" class="choice-card" id="hub-lookup-btn" style="margin-top:20px;">
+      <div class="big">🏅 Meu resultado</div>
+      <div class="small">Buscar como eu fui, com código da sala + meu nome</div>
+    </button>
+    <button type="button" class="choice-card" id="hub-room-btn" style="margin-top:14px;">
+      <div class="big">📋 Placar de uma sala</div>
+      <div class="small">Ver o resultado de todo mundo, só com o código da sala</div>
+    </button>
+
+    <button class="btn-link" id="hub-back" style="margin-top:20px;">← quero entrar num jogo</button>
+  `;
+  document.getElementById("hub-lookup-btn").onclick = () => { view = "lookup"; render(); };
+  document.getElementById("hub-room-btn").onclick = () => { view = "roomresults"; render(); };
+  document.getElementById("hub-back").onclick = () => { view = "join"; render(); };
 }
 
 /* ---------------- buscar resultado de jogo encerrado ---------------- */
@@ -722,7 +748,7 @@ function renderLookup() {
   `;
   const codeInput = document.getElementById("lookup-code");
   codeInput.oninput = () => (codeInput.value = codeInput.value.replace(/\D/g, "").slice(0, 6));
-  document.getElementById("lookup-back").onclick = () => { view = "join"; render(); };
+  document.getElementById("lookup-back").onclick = () => { view = "resultshub"; render(); };
   document.getElementById("lookup-btn").onclick = () =>
     lookupResult(codeInput.value, document.getElementById("lookup-name").value);
 }
@@ -816,7 +842,7 @@ function renderRoomResults() {
   `;
   const codeInput = document.getElementById("room-results-code");
   codeInput.oninput = () => (codeInput.value = codeInput.value.replace(/\D/g, "").slice(0, 6));
-  document.getElementById("room-results-back").onclick = () => { view = "join"; render(); };
+  document.getElementById("room-results-back").onclick = () => { view = "resultshub"; render(); };
   document.getElementById("room-results-btn").onclick = () => lookupRoomResults(codeInput.value);
 }
 
