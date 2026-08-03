@@ -5,7 +5,7 @@ import {
 
 import { firebaseConfig } from "../shared/firebase-config.js";
 import { AVATAR_COLORS, SPECIES, SPECIES_LABEL, HATS, GLASSES, defaultAvatar, avatarSVG, avatarPngDataUrl } from "../shared/avatar.js";
-import { lateJoinAllowed, questionMaxPoints, scoreQuestionSequence } from "../shared/scoring.js";
+import { lateJoinAllowed, questionMaxPoints, scoreQuestionSequence, kahootPoints } from "../shared/scoring.js";
 import { cooperativeProgress } from "../shared/game-modes.js";
 import { getJsPDF, addPdfHeader, addSectionTitle, AUTOTABLE_THEME } from "../shared/pdf-helpers.js";
 
@@ -48,6 +48,7 @@ let bluffVoteOptions = null;
 let takenTeams = [];
 let readySubmitted = false;
 let readyPhaseKey = null;
+let roomResultsData = null;
 let musicAudioEl = null;
 let musicToggleEl = null;
 let musicMuted = false;
@@ -251,8 +252,15 @@ function renderRace() {
       <p style="color:var(--text-dim); margin-top:8px;">${isAsync ? "Seu resultado já foi registrado — o organizador fecha a sala quando quiser." : "Aguardando o fim da corrida pra todo mundo..."}</p>
       <div style="color:var(--gold); font-weight:700; margin-top:14px;">Total: ${myScore?.total ?? 0} pontos</div>
     `;
-    if (isAsync) root.innerHTML += `<button class="btn-link" id="leave-btn-race" style="margin-top:16px;">sair da sala</button>`;
-    document.getElementById("leave-btn-race")?.addEventListener("click", leaveGame);
+    // Sem botão de "sair da sala" aqui de propósito: nesse ponto o
+    // jogador já terminou a própria corrida, e esse botão apagava o
+    // registro dele (players/scores ficam órfãos do nome) — fácil de
+    // clicar sem querer achando que só fecha a tela, perdendo o dado.
+    // Quem quiser sair, fecha a aba/navega pra outro lugar por conta própria.
+    if (isAsync) {
+      root.innerHTML += `<button class="btn btn-primary btn-block" id="pdf-btn-race" style="margin-top:18px;">Baixar meu resultado em PDF</button>`;
+    }
+    document.getElementById("pdf-btn-race")?.addEventListener("click", () => downloadMyRaceReportPdf());
     return;
   }
 
@@ -651,6 +659,8 @@ function render() {
     updateMusicForRace(isAsyncRace ? sessionData : null);
     if (view === "join") return renderJoin();
     if (view === "lookup") return renderLookup();
+    if (view === "roomresults") return renderRoomResults();
+    if (view === "roomresultsview") return renderRoomResultsView();
     if (view === "avatar") return renderAvatarPicker();
     if (view === "team") return renderTeamPicker();
     if (view === "wait") return renderWait();
@@ -686,12 +696,14 @@ function renderJoin() {
     <div id="join-error" class="error-text"></div>
     <button class="btn btn-primary btn-block" id="join-btn" style="margin-top:18px;">Entrar →</button>
     <button class="btn-link" id="lookup-link" style="margin-top:16px;">já joguei — buscar meu resultado</button>
+    <button class="btn-link" id="room-results-link" style="margin-top:10px;">ver o placar final de uma sala</button>
   `;
   const codeInput = document.getElementById("join-code");
   codeInput.oninput = () => (codeInput.value = codeInput.value.replace(/\D/g, "").slice(0, 6));
   if (joinCodeValue) document.getElementById("join-name").focus();
   document.getElementById("join-btn").onclick = () => goToAvatarStep(codeInput.value, document.getElementById("join-name").value);
   document.getElementById("lookup-link").onclick = () => { view = "lookup"; render(); };
+  document.getElementById("room-results-link").onclick = () => { view = "roomresults"; render(); };
 }
 
 /* ---------------- buscar resultado de jogo encerrado ---------------- */
@@ -791,6 +803,71 @@ async function openLookupResult(c, sess, pid, playerData) {
   render();
 }
 
+/* ---------------- placar final de uma sala (qualquer participante) ---------------- */
+function renderRoomResults() {
+  root.innerHTML = `
+    <button class="btn-link" id="room-results-back" style="align-self:flex-start; margin-bottom:16px;">← voltar</button>
+    <div class="eyebrow">placar final</div>
+    <h1 style="font-size:22px; margin-top:6px;">Ver o resultado de todo mundo</h1>
+    <p style="color:var(--text-dim); margin-top:6px; font-size:13px;">Digite só o código da sala — não precisa ter jogado nela. Só funciona pra jogos que já terminaram.</p>
+    <input class="input" id="room-results-code" placeholder="Código da sala (000000)" maxlength="6" style="text-align:center; font-size:22px; letter-spacing:4px; font-family:var(--font-display); margin-top:16px;" />
+    <div id="room-results-error" class="error-text"></div>
+    <button class="btn btn-primary btn-block" id="room-results-btn" style="margin-top:18px;">Ver placar →</button>
+  `;
+  const codeInput = document.getElementById("room-results-code");
+  codeInput.oninput = () => (codeInput.value = codeInput.value.replace(/\D/g, "").slice(0, 6));
+  document.getElementById("room-results-back").onclick = () => { view = "join"; render(); };
+  document.getElementById("room-results-btn").onclick = () => lookupRoomResults(codeInput.value);
+}
+
+async function lookupRoomResults(inputCode) {
+  const c = (inputCode || "").trim();
+  const errEl = document.getElementById("room-results-error");
+  const showErr = (msg) => { if (errEl) errEl.textContent = msg; };
+  if (!/^\d{6}$/.test(c)) return showErr("Digite o código de 6 dígitos da sala.");
+
+  const btn = document.getElementById("room-results-btn");
+  if (btn) { btn.disabled = true; btn.textContent = "Buscando..."; }
+
+  try {
+    const snap = await getDoc(doc(db, "sessions", c));
+    if (!snap.exists()) return showErr("Não encontrei essa sala.");
+    const sess = snap.data();
+    if (sess.status !== "ended") return showErr("Esse jogo ainda não terminou — volte quando ele acabar.");
+
+    roomResultsData = { code: c, sess };
+    view = "roomresultsview";
+    render();
+  } catch (err) {
+    console.error("Erro ao buscar placar da sala:", err);
+    showErr("Não consegui buscar agora. Tenta de novo.");
+  } finally {
+    if (btn) { btn.disabled = false; btn.textContent = "Ver placar →"; }
+  }
+}
+
+function renderRoomResultsView() {
+  const { code: c, sess } = roomResultsData;
+  const final = sess.finalLeaderboard || [];
+  root.innerHTML = `
+    <button class="btn-link" id="room-results-view-back" style="align-self:flex-start; margin-bottom:16px;">← voltar</button>
+    <div class="eyebrow">placar final</div>
+    <h1 style="font-size:20px; margin-top:6px;">${escapeHtml(sess.title || "")}</h1>
+    <p style="color:var(--text-dim); font-size:12px; margin-top:2px;">sala ${c}</p>
+    <div style="margin-top:18px;">
+      ${final.map((p, i) => `
+        <div class="rank-row">
+          <span class="rank-num" style="color:${i === 0 ? "var(--gold)" : "var(--text-dim)"};">${i + 1}</span>
+          ${p.avatar ? `<span class="mini-avatar">${avatarSVG(p.avatar, 30)}</span>` : ""}
+          <span style="flex:1; font-weight:600;">${escapeHtml(p.name)}</span>
+          <span style="color:var(--gold); font-weight:700;">${p.total}</span>
+        </div>
+      `).join("") || `<div style="color:var(--text-dim); font-size:13px;">Ninguém pontuou nessa sala.</div>`}
+    </div>
+  `;
+  document.getElementById("room-results-view-back").onclick = () => { view = "roomresults"; render(); };
+}
+
 function renderAvatarPicker() {
   root.innerHTML = `
     <div class="eyebrow">monte seu bichinho</div>
@@ -837,9 +914,10 @@ function renderEliminated() {
     <p style="color:var(--text-dim); margin-top:8px;">Modo Sobrevivência: quem erra sai do jogo. Continue nessa tela — assim que o jogo acabar pra todo mundo, você vai ver o resultado final automaticamente.</p>
     ${myScore ? `<div style="color:var(--text-dim); margin-top:14px;">Sua pontuação até aqui: <b style="color:var(--text);">${myScore.total}</b></div>` : ""}
     <button class="btn btn-primary btn-block" id="pdf-btn-elim" style="margin-top:18px;">Baixar meu resultado em PDF</button>
-    <button class="btn-link" id="leave-btn" style="margin-top:14px;">sair da sala</button>
   `;
-  document.getElementById("leave-btn").onclick = leaveGame;
+  // Sem "sair da sala" aqui: a pessoa ainda faz parte do resultado final
+  // do jogo (mesmo eliminada), e esse botão apagava o registro dela —
+  // fácil de confundir com "fechar a tela" e perder o dado à toa.
   document.getElementById("pdf-btn-elim").onclick = () => downloadMyReportPdf("pdf-btn-elim");
 }
 
@@ -1095,6 +1173,70 @@ function renderEnd() {
   document.getElementById("pdf-btn").onclick = () => downloadMyReportPdf();
   document.getElementById("leave-btn").onclick = goHome;
   localStorage.removeItem("quiz-player");
+}
+
+// PDF pessoal de uma Corrida Assíncrona — pensado pra ser baixado ANTES
+// do organizador fechar a sala (às vezes só dias depois). Mostra a
+// resposta que a PESSOA deu e se acertou ou não, mas nunca a resposta
+// certa em si — assim ela fica com um registro do que jogou sem virar
+// um gabarito que possa ser repassado pra quem ainda não jogou.
+async function downloadMyRaceReportPdf() {
+  const jsPDF = getJsPDF();
+  if (!jsPDF) return;
+  const s = sessionData;
+  const btn = document.getElementById("pdf-btn-race");
+  if (btn) { btn.disabled = true; btn.textContent = "Gerando PDF..."; }
+
+  try {
+    const snaps = await Promise.all(
+      s.questions.map((_, idx) => getDoc(doc(db, "sessions", code, "answers", `${idx}_${playerId}`)))
+    );
+
+    const rows = s.questions.map((q, idx) => {
+      const snap = snaps[idx];
+      if (!snap.exists()) return [q.text, "não respondeu", "—"];
+      const ans = snap.data();
+      return [
+        q.text,
+        (ans.selected || []).map((i) => q.options[i]).join(", "),
+        `${((ans.timeMs || 0) / 1000).toFixed(1)}s`,
+      ];
+    });
+
+    const doc_ = new jsPDF();
+    let y = addPdfHeader(doc_, { eyebrow: "meu resultado · corrida", title: s.title, subtitle: playerName });
+
+    try {
+      const png = await avatarPngDataUrl(avatarDraft, 200);
+      doc_.addImage(png, "PNG", 14, y, 26, 26);
+    } catch { /* segue sem avatar se algo falhar */ }
+
+    doc_.setFontSize(22);
+    doc_.setTextColor(26, 22, 10);
+    doc_.text(`${myScore?.total ?? 0} pontos`, 46, y + 12);
+    doc_.setFontSize(11);
+    doc_.setTextColor(110, 110, 120);
+    doc_.text("resultado parcial — a sala ainda pode estar aberta pra outros jogadores", 46, y + 20);
+    y += 36;
+
+    y = addSectionTitle(doc_, "Pergunta a pergunta", y);
+    doc_.autoTable({
+      startY: y,
+      head: [["Pergunta", "Sua resposta", "Tempo"]],
+      body: rows,
+      columnStyles: { 0: { cellWidth: 90 } },
+      ...AUTOTABLE_THEME,
+      margin: { left: 14, right: 14 },
+    });
+
+    doc_.save(`meu-resultado-corrida-${code}.pdf`);
+  } catch (err) {
+    console.error("Erro ao gerar PDF da corrida:", err);
+    alert("Não consegui gerar o PDF agora. Tenta de novo em alguns segundos.");
+  } finally {
+    const btnAgain = document.getElementById("pdf-btn-race");
+    if (btnAgain) { btnAgain.disabled = false; btnAgain.textContent = "Baixar meu resultado em PDF"; }
+  }
 }
 
 async function downloadMyReportPdf(btnId = "pdf-btn") {

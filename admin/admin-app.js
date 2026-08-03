@@ -191,9 +191,9 @@ function renderList() {
     </div>
   `;
   bindNavTabs();
-  document.getElementById("new-quiz-btn").onclick = () => { quizDraft = emptyQuiz(); view = "editor"; render(); };
+  document.getElementById("new-quiz-btn").onclick = () => { quizDraft = emptyQuiz(); questionDraft = null; view = "editor"; render(); };
   quizzes.forEach((q) => {
-    document.getElementById(`edit-${q.id}`)?.addEventListener("click", () => { quizDraft = JSON.parse(JSON.stringify(q)); view = "editor"; render(); });
+    document.getElementById(`edit-${q.id}`)?.addEventListener("click", () => { quizDraft = JSON.parse(JSON.stringify(q)); questionDraft = null; view = "editor"; render(); });
     document.getElementById(`open-${q.id}`)?.addEventListener("click", () => openLaunchConfig(q));
     document.getElementById(`dup-${q.id}`)?.addEventListener("click", () => duplicateQuiz(q));
     document.getElementById(`del-${q.id}`)?.addEventListener("click", () => deleteQuiz(q));
@@ -297,6 +297,7 @@ async function duplicateQuiz(q, opts = {}) {
   };
   const ref = await addDoc(collection(db, "quizzes"), payload);
   quizDraft = { ...payload, id: ref.id, createdAt: null, updatedAt: null };
+  questionDraft = null;
   if (!opts.fromCommunity) {
     view = "editor";
     render();
@@ -599,7 +600,7 @@ function renderEditor() {
   document.getElementById("quiz-shuffle-answers").onchange = (e) => (q.shuffleAnswers = e.target.checked);
 
   renderQuestionList();
-  if (!questionDraft) questionDraft = emptyQuestion(q.defaultTimeLimit || 20, quizDraft.defaultQuestionImage);
+  if (!questionDraft) questionDraft = emptyQuestion(q.defaultTimeLimit || 20);
   renderQuestionForm();
 }
 
@@ -727,10 +728,9 @@ function renderQuestionForm() {
   document.getElementById("q-img-remove")?.addEventListener("click", () => { d.imageUrl = null; d.imageCredit = null; renderQuestionForm(); });
   document.getElementById("q-img-apply-all")?.addEventListener("click", () => {
     quizDraft.questions.forEach((item) => { item.imageUrl = d.imageUrl; item.imageCredit = d.imageCredit; });
-    quizDraft.defaultQuestionImage = { url: d.imageUrl, credit: d.imageCredit };
     renderQuestionList();
     renderQuestionForm();
-    document.getElementById("q-img-apply-result").textContent = `✓ imagem aplicada às ${quizDraft.questions.length} pergunta(s) já cadastradas — e as próximas já nascem com ela também.`;
+    document.getElementById("q-img-apply-result").textContent = `✓ imagem aplicada às ${quizDraft.questions.length} pergunta(s) já cadastradas.`;
   });
   document.getElementById("q-text").oninput = (e) => {
     d.text = e.target.value;
@@ -750,7 +750,7 @@ function renderQuestionForm() {
   });
   document.getElementById("q-save").onclick = saveQuestionDraft;
   document.getElementById("q-cancel")?.addEventListener("click", () => {
-    questionDraft = emptyQuestion(quizDraft.defaultTimeLimit || 20, quizDraft.defaultQuestionImage);
+    questionDraft = emptyQuestion(quizDraft.defaultTimeLimit || 20);
     questionEditingIdx = null;
     renderEditor();
   });
@@ -841,7 +841,7 @@ function saveQuestionDraft() {
   errEl.textContent = "";
   if (questionEditingIdx === null) quizDraft.questions.push(clean);
   else quizDraft.questions[questionEditingIdx] = clean;
-  questionDraft = emptyQuestion(quizDraft.defaultTimeLimit || 20, quizDraft.defaultQuestionImage);
+  questionDraft = emptyQuestion(quizDraft.defaultTimeLimit || 20);
   questionEditingIdx = null;
   renderEditor();
 }
