@@ -251,7 +251,8 @@ function quizCardHtml(q) {
       <div class="cover" style="${q.coverImage ? `background-image:url('${q.coverImage}')` : ""}"></div>
       <div class="body">
         <div class="title">${escapeHtml(q.title || "Sem título")}</div>
-        <div class="theme-tag">${escapeHtml(q.theme || "sem tema")} ${q.isPublic === true ? "· 🌐 público" : "· 🔒 privado"}</div>
+        <div class="theme-tag">${escapeHtml(q.theme || "sem tema")}</div>
+        <div class="visibility-badge ${q.isPublic === true ? "is-public" : "is-private"}">${q.isPublic === true ? "🌐 Público" : "🔒 Privado"}</div>
         <div class="meta">${(q.questions || []).length} pergunta${(q.questions || []).length !== 1 ? "s" : ""}</div>
         <div class="actions">
           <button class="btn btn-primary" id="open-${q.id}">Abrir sala</button>
@@ -966,7 +967,13 @@ function ensureMusicUi() {
 
 function updateMusicForSession(s) {
   ensureMusicUi();
-  if (!s || s.status === "ended" || !s.musicUrl) {
+  // Na corrida assíncrona não tem "telão" compartilhado — cada jogador
+  // joga no próprio tempo, em dias diferentes até. Não faz sentido o
+  // admin ficar ouvindo (ou tendo que silenciar) uma música que toca
+  // sozinha na tela dele por horas/dias enquanto a sala fica aberta.
+  // Cada participante decide por conta própria, no jogo/, se quer ouvir.
+  const isAsyncRace = s?.status === "racing" && s?.raceSubmode === "async";
+  if (!s || s.status === "ended" || !s.musicUrl || isAsyncRace) {
     if (musicAudioEl) musicAudioEl.pause();
     musicToggleEl.style.display = "none";
     return;
@@ -1267,16 +1274,12 @@ async function endRace() {
 }
 
 function fmtDuration(ms) {
-  if (ms <= 0) return "0min";
+  if (ms <= 0) return "0d 0h 0m";
   const totalMin = Math.ceil(ms / 60000);
   const days = Math.floor(totalMin / 1440);
   const hours = Math.floor((totalMin % 1440) / 60);
   const min = totalMin % 60;
-  const parts = [];
-  if (days) parts.push(`${days}d`);
-  if (hours) parts.push(`${hours}h`);
-  if (min && !days) parts.push(`${min}min`);
-  return parts.join(" ") || "0min";
+  return `${days}d ${hours}h ${min}m`;
 }
 
 function renderRaceAsyncControl() {
@@ -1285,16 +1288,26 @@ function renderRaceAsyncControl() {
   const remainingMs = (s.raceWindowEndsAt || 0) - Date.now();
   const windowOpen = remainingMs > 0;
   const rows = buildLeaderboardRows({ gameMode: s.gameMode, teamMode: s.teamMode, players: sessionPlayers, totals: raceScoresCache }).slice(0, 10);
+  const joinUrl = new URL(`../jogo/index.html?code=${sessionCode}`, window.location.href).href;
 
   root.innerHTML = `
+    <button class="btn-link" id="race-async-back">← voltar às sessões</button>
     <div class="eyebrow" style="text-align:center;">corrida assíncrona</div>
     <h2 style="text-align:center; font-size:20px; margin:10px 0;">${windowOpen ? "Sala aberta" : "Janela encerrada"}</h2>
     <div style="text-align:center; color:${windowOpen ? "var(--gold)" : "var(--coral)"}; font-weight:700; font-size:16px;" id="race-window-status">
       ${windowOpen ? `Fecha em ${fmtDuration(remainingMs)}` : "Aguardando você encerrar e calcular o resultado"}
     </div>
     <p style="color:var(--text-dim); text-align:center; font-size:12px; margin-top:6px;">
-      Cada jogador entra e joga quando quiser, com o próprio tempo de ${Math.round((s.raceDurationSec || 0) / 60)}min pra responder tudo — dentro dessa janela.
+      Cada jogador entra e joga quando quiser, com o próprio tempo de ${Math.round((s.raceDurationSec || 0) / 60)}min pra responder tudo — dentro dessa janela. Você não precisa ficar esperando aqui: pode voltar às sessões e conferir o resultado depois.
     </p>
+
+    ${windowOpen ? `
+      <div class="join-link-row" style="margin-top:14px;">
+        <input class="input" id="join-url" readonly value="${joinUrl}" />
+        <button class="btn btn-ghost" id="copy-link-btn">copiar link</button>
+      </div>
+      <p style="color:var(--text-dim); text-align:center; font-size:11px; margin-top:4px;">Manda esse link pra quem mais você quiser convidar — a sala continua aberta.</p>
+    ` : ""}
 
     <div style="margin-top:20px;">
       ${rows.map((p, i) => `
@@ -1327,6 +1340,28 @@ function renderRaceAsyncControl() {
     const unit = document.getElementById("extend-unit").value;
     extendRaceWindow(value * (unit === "dias" ? 86400000 : 3600000));
   });
+  document.getElementById("copy-link-btn")?.addEventListener("click", async () => {
+    const input = document.getElementById("join-url");
+    input.select();
+    try {
+      await navigator.clipboard.writeText(joinUrl);
+    } catch {
+      document.execCommand("copy");
+    }
+    const btn = document.getElementById("copy-link-btn");
+    const original = btn.textContent;
+    btn.textContent = "copiado!";
+    setTimeout(() => (btn.textContent = original), 1500);
+  });
+  document.getElementById("race-async-back").onclick = () => {
+    clearInterval(raceControlInt);
+    unsubSession && unsubSession();
+    unsubPlayers && unsubPlayers();
+    unsubRaceScores && unsubRaceScores();
+    view = "sessions";
+    subscribeSessionsList();
+    render();
+  };
 
   raceControlInt = setInterval(() => {
     if (sessionData.status !== "racing") { clearInterval(raceControlInt); return; }

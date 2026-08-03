@@ -48,6 +48,9 @@ let bluffVoteOptions = null;
 let takenTeams = [];
 let readySubmitted = false;
 let readyPhaseKey = null;
+let musicAudioEl = null;
+let musicToggleEl = null;
+let musicMuted = false;
 
 /* tenta retomar sessão salva no navegador (se a pessoa recarregar a página) —
    mas só se aquela sessão ainda existir e não tiver acabado; caso
@@ -88,8 +91,8 @@ async function boot() {
           const ansSnap = await getDoc(doc(db, "sessions", code, "answers", `${sessionData.currentIndex}_${playerId}`));
           hasAnswered = ansSnap.exists();
         }
-        if (sessionData.status === "racing") startRace();
         view = viewForStatus(sessionData.status);
+        if (sessionData.status === "racing") await startRace();
         subscribeSession();
         render();
         return;
@@ -188,17 +191,42 @@ function reactToStatus() {
 
 /* ---------------- corrida livre ---------------- */
 
-function startRace() {
-  raceIndex = 0;
+// Antes, essa função sempre zerava raceIndex pra 0 — então qualquer
+// refresh de página (ou reabrir o jogo) fazia a corrida "recomeçar" da
+// pergunta 1, mesmo que a pessoa já tivesse respondido (certo ou
+// errado) várias perguntas antes. Além de ser confuso, isso fazia o
+// jogador tentar responder de novo uma pergunta já registrada — e como
+// a regra do Firestore não deixa REESCREVER uma resposta já gravada
+// (só criar uma vez), essa segunda tentativa era rejeitada.
+// Agora a gente descobre em qual pergunta a pessoa realmente parou,
+// checando (uma por uma, na ordem) se já existe resposta gravada pra
+// cada índice — e só então mostra a próxima pergunta ainda não
+// respondida.
+async function startRace() {
   raceSelected = [];
-  raceQuestionShownAt = Date.now();
   raceFeedback = null;
-  if (sessionData?.raceSubmode === "async" && !myRaceStartedAt) {
+  const s = sessionData;
+  if (s?.raceSubmode === "async" && !myRaceStartedAt) {
     let saved = {};
     try { saved = JSON.parse(localStorage.getItem("quiz-player") || "null") || {}; } catch { saved = {}; }
     myRaceStartedAt = saved.myRaceStartedAt || Date.now();
     localStorage.setItem("quiz-player", JSON.stringify({ ...saved, code, playerId, myRaceStartedAt }));
   }
+  let resumeIndex = 0;
+  if (s?.questions?.length) {
+    try {
+      while (resumeIndex < s.questions.length) {
+        const ansSnap = await getDoc(doc(db, "sessions", code, "answers", `${resumeIndex}_${playerId}`));
+        if (!ansSnap.exists()) break;
+        resumeIndex += 1;
+      }
+    } catch {
+      resumeIndex = 0; // sem internet pra checar: melhor deixar responder do início do que travar
+    }
+  }
+  raceIndex = resumeIndex;
+  raceQuestionShownAt = Date.now();
+  if (view === "race") render();
 }
 
 function renderRace() {
@@ -289,11 +317,14 @@ function renderRace() {
 // alguém adulterar a própria pontuação mexendo direto no banco. As
 // regras do Firestore só liberam essa gravação quando o quiz está
 // mesmo configurado como corrida.
+let raceSubmitting = false;
 async function submitRaceAnswer(sel) {
+  if (raceSubmitting) return; // trava contra clique duplo enviando a mesma pergunta 2x
   const s = sessionData;
   const q = s.questions[raceIndex];
   const selected = sel || raceSelected;
   if (selected.length === 0) return;
+  raceSubmitting = true;
 
   try {
     const timeMs = Date.now() - raceQuestionShownAt;
@@ -318,12 +349,62 @@ async function submitRaceAnswer(sel) {
       raceIndex += 1;
       raceSelected = [];
       raceQuestionShownAt = Date.now();
+      raceSubmitting = false;
       render();
     }, 900);
   } catch (err) {
-    console.error("Erro ao registrar resposta da corrida:", err);
-    alert("Não consegui registrar essa resposta. Confira sua internet e tenta de novo.");
+    raceSubmitting = false;
+    // Loga o código real do erro (ex: "permission-denied") pra facilitar o
+    // diagnóstico — se for permission-denied, o mais provável é que as
+    // regras do Firestore publicadas no Firebase Console estejam
+    // desatualizadas em relação ao firestore.rules deste projeto.
+    console.error("Erro ao registrar resposta da corrida:", err?.code || err);
+    if (err?.code === "permission-denied") {
+      alert("Não consegui registrar essa resposta (permissão negada pelo servidor). Avise quem organiza o jogo: pode ser que as regras do Firestore precisem ser republicadas.");
+    } else {
+      alert("Não consegui registrar essa resposta. Confira sua internet e tenta de novo.");
+    }
   }
+}
+
+/* ---------------- música (só corrida assíncrona) ---------------- */
+function ensureMusicUi() {
+  if (musicToggleEl) return;
+  musicToggleEl = document.createElement("button");
+  musicToggleEl.id = "music-toggle-btn";
+  musicToggleEl.style.cssText = "position:fixed; top:14px; right:14px; background:var(--surface); border:1px solid var(--surface-line); color:var(--text); border-radius:999px; padding:8px 13px; z-index:50; cursor:pointer; font-size:16px; display:none;";
+  musicToggleEl.textContent = "🔊";
+  musicToggleEl.onclick = () => {
+    musicMuted = !musicMuted;
+    if (musicAudioEl) {
+      if (musicMuted) musicAudioEl.pause();
+      else musicAudioEl.play().catch(() => {});
+    }
+    musicToggleEl.textContent = musicMuted ? "🔇" : "🔊";
+  };
+  document.body.appendChild(musicToggleEl);
+}
+
+function updateMusicForRace(s) {
+  ensureMusicUi();
+  if (!s || !s.musicUrl) {
+    if (musicAudioEl) musicAudioEl.pause();
+    musicToggleEl.style.display = "none";
+    return;
+  }
+  if (!musicAudioEl) {
+    musicAudioEl = document.createElement("audio");
+    musicAudioEl.loop = true;
+    musicAudioEl.volume = 0.32;
+    document.body.appendChild(musicAudioEl);
+  }
+  if (musicAudioEl.dataset.url !== s.musicUrl) {
+    musicAudioEl.dataset.url = s.musicUrl;
+    musicAudioEl.src = s.musicUrl;
+    if (!musicMuted) musicAudioEl.play().catch(() => {});
+  }
+  musicToggleEl.style.display = "block";
+  musicToggleEl.textContent = musicMuted ? "🔇" : "🔊";
 }
 
 /* ---------------- modo blefe ---------------- */
@@ -495,8 +576,8 @@ async function joinRoom() {
     const ansSnap = await getDoc(doc(db, "sessions", code, "answers", `${sessionData.currentIndex}_${playerId}`));
     hasAnswered = ansSnap.exists();
   }
-  if (sessionData.status === "racing") startRace();
   view = viewForStatus(sessionData.status);
+  if (sessionData.status === "racing") await startRace();
   subscribeSession();
   render();
 }
@@ -561,6 +642,13 @@ function render() {
   clearInterval(liveTimerInt);
   root.className = "container";
   try {
+    // Música é só na Corrida Assíncrona: como cada um joga na hora que
+    // quiser (às vezes em dias diferentes), não tem "telão" compartilhado
+    // tocando música pra galera toda — por isso aqui é o próprio jogador
+    // quem escolhe se quer ouvir, com o mesmo botão de liga/desliga que
+    // existe na tela do admin.
+    const isAsyncRace = view === "race" && sessionData?.raceSubmode === "async";
+    updateMusicForRace(isAsyncRace ? sessionData : null);
     if (view === "join") return renderJoin();
     if (view === "lookup") return renderLookup();
     if (view === "avatar") return renderAvatarPicker();
