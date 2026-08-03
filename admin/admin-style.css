@@ -3,7 +3,7 @@
   margin-bottom: 22px;
 }
 
-.nav-tabs { display: flex; gap: 8px; }
+.nav-tabs { display: flex; gap: 8px; flex-wrap: wrap; }
 .nav-tab {
   background: transparent; border: 1.5px solid var(--surface-line); color: var(--text-dim);
   border-radius: 999px; padding: 8px 16px; font-size: 13px; cursor: pointer;

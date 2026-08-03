@@ -6,7 +6,12 @@ service cloud.firestore {
     // PRÓPRIOS quizzes (campo ownerId = uid de quem criou). Um amigo não
     // vê nem consegue mexer nos quizzes de outro.
     match /quizzes/{quizId} {
-      allow read, delete: if request.auth != null && resource.data.ownerId == request.auth.uid;
+      // qualquer conta autenticada pode LER um quiz se ele for público,
+      // ou se for dela mesma — assim dá pra jogar/copiar quiz de outro
+      // organizador, mas continuar privado quando o dono quiser
+      allow read: if request.auth != null
+                  && (resource.data.isPublic == true || resource.data.ownerId == request.auth.uid);
+      allow delete: if request.auth != null && resource.data.ownerId == request.auth.uid;
       allow create: if request.auth != null && request.resource.data.ownerId == request.auth.uid;
       allow update: if request.auth != null
                     && resource.data.ownerId == request.auth.uid

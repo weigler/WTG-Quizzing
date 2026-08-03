@@ -26,6 +26,16 @@ dá pra ter vários organizadores (até 10 ou mais) sem que um interfira no
 que é do outro. Sem cadastro público: só quem já tem uma conta criada
 consegue entrar.
 
+### Quizzes públicos e a aba Comunidade
+Todo quiz novo nasce **público por padrão** — outras contas de admin
+conseguem ver, jogar e copiar pro próprio acervo. Dá pra deixar um quiz
+**privado** a qualquer momento (desmarcando "Quiz público" no cadastro),
+aí só o dono enxerga. A aba **Comunidade** mostra os quizzes públicos
+das outras contas, com dois botões: **Abrir sala** (joga direto, sem
+precisar copiar) ou **Copiar pro meu acervo** (traz uma cópia editável
+pra "Meus quizzes" — a cópia sempre começa privada, o novo dono decide
+se quer publicar).
+
 ### Importar perguntas
 Em vez de cadastrar uma por uma, dá pra colar um texto com várias
 perguntas de uma vez (formato simples, com um modelo pronto pra copiar) ou
@@ -129,7 +139,10 @@ disponível pra avançar antes, se quiser. Quem organiza controla o resto
 do ritmo: mostra a pergunta com cronômetro, revela a resposta certa com
 um gráfico de quantos escolheram cada opção, mostra o placar, e avança
 pra próxima. Se o navegador travar ou fechar no meio do jogo, dá pra
-retomar o controle de onde parou.
+retomar o controle de onde parou. A qualquer momento, dá pra **encerrar a
+sessão antes da hora** — útil se alguém desistir no meio do caminho: o
+resultado final é calculado com o placar até ali, sem perder nada do que
+já rolou.
 
 ### Gerenciar jogadores
 Dá pra remover qualquer jogador de uma sessão — na sala de espera,
@@ -160,11 +173,13 @@ jogo** de cada uma. Depois (ou durante) qualquer sessão, dá pra ver um
 relatório detalhado: classificação geral (já respeitando equipes ou
 placar coletivo, quando for o caso), e pergunta por pergunta quem
 respondeu o quê, se acertou, quanto tempo levou, o combo (com os pontos
-de bônus) e quantos pontos ganhou no total. Exporta em **CSV** ou em
-**PDF** (com o modo de jogo no cabeçalho) — de graça, sem limitar isso a
-um plano pago. Pela mesma tela também dá pra **excluir** uma sessão
-inteira (em andamento ou já encerrada), removendo sala, jogadores,
-respostas e pontuações dela.
+de bônus) e quantos pontos ganhou no total. **No modo Equipes**, o
+relatório mostra as duas classificações: por equipe (a oficial) e também
+individual (pra cada jogador ver a própria contribuição dentro do time).
+Exporta em **CSV** ou em **PDF** (com o modo de jogo no cabeçalho) — de
+graça, sem limitar isso a um plano pago. Pela mesma tela também dá pra
+**excluir** uma sessão inteira (em andamento ou já encerrada), removendo
+sala, jogadores, respostas e pontuações dela.
 
 ---
 

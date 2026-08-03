@@ -24,6 +24,8 @@ const db = getFirestore(app);
 let view = "list"; // list | editor | control | sessions | report
 let quizzes = [];
 let unsubQuizzes = null;
+let communityQuizzes = [];
+let unsubCommunityQuizzes = null;
 let unsubSession = null;
 let unsubPlayers = null;
 
@@ -69,8 +71,10 @@ onAuthStateChanged(auth, (user) => {
     unsubPlayers && unsubPlayers();
     unsubRaceScores && unsubRaceScores();
     unsubSessionsList && unsubSessionsList();
+    unsubCommunityQuizzes && unsubCommunityQuizzes();
     quizzes = [];
     sessionsList = [];
+    communityQuizzes = [];
     if (musicAudioEl) musicAudioEl.pause();
     if (musicToggleEl) musicToggleEl.style.display = "none";
   }
@@ -117,7 +121,7 @@ function emptyQuestion(timeLimit = 20, image = null) {
   return { id: rid(), text: "", type: "single", options: ["", ""], correct: [], timeLimit, pointsMultiplier: 1, imageUrl: image?.url || null, imageCredit: image?.credit || null };
 }
 function emptyQuiz() {
-  return { id: null, title: "", theme: "", coverImage: null, coverCredit: null, defaultTimeLimit: 20, musicUrl: null, precisionMode: false, comboMode: false, shuffleQuestions: false, shuffleAnswers: false, questions: [] };
+  return { id: null, title: "", theme: "", coverImage: null, coverCredit: null, defaultTimeLimit: 20, musicUrl: null, precisionMode: false, comboMode: false, shuffleQuestions: false, shuffleAnswers: false, isPublic: true, questions: [] };
 }
 
 function subscribeQuizzes() {
@@ -141,6 +145,7 @@ function render() {
   try {
     updateMusicForSession(view === "control" ? sessionData : null);
     if (view === "list") return renderList();
+    if (view === "community") return renderCommunity();
     if (view === "editor") return renderEditor();
     if (view === "launch") return renderLaunchConfig();
     if (view === "control") return renderControl();
@@ -162,12 +167,14 @@ function navTabsHtml(active) {
   return `
     <div class="nav-tabs">
       <button class="nav-tab ${active === "list" ? "active" : ""}" id="nav-quizzes">Meus quizzes</button>
+      <button class="nav-tab ${active === "community" ? "active" : ""}" id="nav-community">Comunidade</button>
       <button class="nav-tab ${active === "sessions" ? "active" : ""}" id="nav-sessions">Sessões</button>
     </div>
   `;
 }
 function bindNavTabs() {
   document.getElementById("nav-quizzes").onclick = () => { view = "list"; render(); };
+  document.getElementById("nav-community").onclick = () => { view = "community"; subscribeCommunityQuizzes(); render(); };
   document.getElementById("nav-sessions").onclick = () => { view = "sessions"; subscribeSessionsList(); render(); };
 }
 
@@ -193,6 +200,46 @@ function renderList() {
   });
 }
 
+function renderCommunity() {
+  root.innerHTML = `
+    ${navTabsHtml("community")}
+    <div style="margin-top:16px;">
+      <h1 style="font-size:24px;">Comunidade</h1>
+      <p style="color:var(--text-dim); font-size:13px; margin-top:4px;">Quizzes públicos de outras contas — dá pra abrir uma sala direto ou copiar pro seu acervo (a cópia começa privada, só sua).</p>
+    </div>
+    <div class="quiz-grid" style="margin-top:14px;">
+      ${communityQuizzes.map(communityQuizCardHtml).join("") || `<div style="color:var(--text-dim); margin-top:20px;">Nenhum quiz público de outras contas ainda.</div>`}
+    </div>
+  `;
+  bindNavTabs();
+  communityQuizzes.forEach((q) => {
+    document.getElementById(`copen-${q.id}`)?.addEventListener("click", () => openLaunchConfig(q));
+    document.getElementById(`ccopy-${q.id}`)?.addEventListener("click", async () => {
+      await duplicateQuiz(q, { fromCommunity: true });
+      alert(`"${q.title}" copiado pro seu acervo (como privado). Você já pode editar em "Meus quizzes".`);
+      view = "list";
+      render();
+    });
+  });
+}
+
+function communityQuizCardHtml(q) {
+  return `
+    <div class="quiz-card">
+      <div class="cover" style="${q.coverImage ? `background-image:url('${q.coverImage}')` : ""}"></div>
+      <div class="body">
+        <div class="title">${escapeHtml(q.title || "Sem título")}</div>
+        <div class="theme-tag">${escapeHtml(q.theme || "sem tema")}</div>
+        <div class="meta">${(q.questions || []).length} pergunta${(q.questions || []).length !== 1 ? "s" : ""}</div>
+        <div class="actions">
+          <button class="btn btn-primary" id="copen-${q.id}">Abrir sala</button>
+          <button class="btn btn-ghost" id="ccopy-${q.id}">Copiar pro meu acervo</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
 // Ferramenta de uso único: marca como "meus" todos os quizzes/sessões que
 // ainda não têm dono (criados antes de existir o sistema de contas
 // separadas). Só funciona enquanto as regras do Firestore ainda
@@ -204,7 +251,7 @@ function quizCardHtml(q) {
       <div class="cover" style="${q.coverImage ? `background-image:url('${q.coverImage}')` : ""}"></div>
       <div class="body">
         <div class="title">${escapeHtml(q.title || "Sem título")}</div>
-        <div class="theme-tag">${escapeHtml(q.theme || "sem tema")}</div>
+        <div class="theme-tag">${escapeHtml(q.theme || "sem tema")} ${q.isPublic === true ? "· 🌐 público" : "· 🔒 privado"}</div>
         <div class="meta">${(q.questions || []).length} pergunta${(q.questions || []).length !== 1 ? "s" : ""}</div>
         <div class="actions">
           <button class="btn btn-primary" id="open-${q.id}">Abrir sala</button>
@@ -222,10 +269,10 @@ async function deleteQuiz(q) {
   await deleteDoc(doc(db, "quizzes", q.id));
 }
 
-async function duplicateQuiz(q) {
+async function duplicateQuiz(q, opts = {}) {
   const copy = JSON.parse(JSON.stringify(q));
   delete copy.id;
-  copy.title = `${q.title} (cópia)`;
+  copy.title = opts.fromCommunity ? q.title : `${q.title} (cópia)`;
   copy.questions = (copy.questions || []).map((item) => ({ ...item, id: rid() }));
   const payload = {
     title: copy.title,
@@ -239,14 +286,20 @@ async function duplicateQuiz(q) {
     comboMode: !!copy.comboMode,
     shuffleQuestions: !!copy.shuffleQuestions,
     shuffleAnswers: !!copy.shuffleAnswers,
+    // copiando de outra pessoa: começa privado por padrão (o dono novo
+    // decide se quer publicar); duplicando o próprio quiz: mantém como
+    // já estava
+    isPublic: opts.fromCommunity ? false : (copy.isPublic === true),
     questions: copy.questions,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   };
   const ref = await addDoc(collection(db, "quizzes"), payload);
   quizDraft = { ...payload, id: ref.id, createdAt: null, updatedAt: null };
-  view = "editor";
-  render();
+  if (!opts.fromCommunity) {
+    view = "editor";
+    render();
+  }
 }
 
 let launchQuiz = null;
@@ -443,6 +496,11 @@ function renderEditor() {
     <input class="input" id="quiz-title" placeholder="Título do quiz" value="${escapeAttr(q.title)}" style="font-family:var(--font-display); font-size:20px; font-weight:700; margin-bottom:10px;" />
     <input class="input" id="quiz-theme" placeholder="Tema (ex: Escatologia, História, Diversão)" value="${escapeAttr(q.theme)}" style="margin-bottom:10px;" />
 
+    <label style="display:flex; align-items:center; gap:8px; margin-bottom:20px; font-size:13px; color:var(--text-dim); cursor:pointer;">
+      <input type="checkbox" id="quiz-public" ${q.isPublic === true ? "checked" : ""} />
+      <span><b style="color:var(--text);">Quiz público</b> — outras contas de admin podem ver, jogar e copiar esse quiz (desmarque pra deixar só seu)</span>
+    </label>
+
     <div style="display:flex; align-items:center; gap:10px; margin-bottom:20px;">
       <label style="font-size:13px; color:var(--text-dim); white-space:nowrap;">Tempo padrão por pergunta</label>
       <input class="input" type="number" id="quiz-default-time" min="5" max="60" value="${q.defaultTimeLimit || 20}" style="width:70px;" />
@@ -507,6 +565,7 @@ function renderEditor() {
   document.getElementById("back-btn").onclick = () => { view = "list"; render(); };
   document.getElementById("quiz-title").oninput = (e) => (q.title = e.target.value);
   document.getElementById("quiz-theme").oninput = (e) => (q.theme = e.target.value);
+  document.getElementById("quiz-public").onchange = (e) => (q.isPublic = e.target.checked);
   document.getElementById("quiz-default-time").oninput = (e) => {
     q.defaultTimeLimit = Math.max(5, Math.min(60, Number(e.target.value) || 20));
   };
@@ -792,7 +851,7 @@ async function saveQuiz() {
   if (!q.title.trim()) return (errEl.textContent = "Dê um título ao quiz.");
   if (q.questions.length === 0) return (errEl.textContent = "Adicione ao menos uma pergunta.");
   errEl.textContent = "";
-  const payload = { title: q.title.trim(), theme: q.theme.trim(), coverImage: q.coverImage, coverCredit: q.coverCredit, defaultTimeLimit: q.defaultTimeLimit || 20, musicUrl: q.musicUrl || null, precisionMode: !!q.precisionMode, comboMode: !!q.comboMode, shuffleQuestions: !!q.shuffleQuestions, shuffleAnswers: !!q.shuffleAnswers, questions: q.questions, updatedAt: serverTimestamp() };
+  const payload = { title: q.title.trim(), theme: q.theme.trim(), coverImage: q.coverImage, coverCredit: q.coverCredit, defaultTimeLimit: q.defaultTimeLimit || 20, musicUrl: q.musicUrl || null, precisionMode: !!q.precisionMode, comboMode: !!q.comboMode, shuffleQuestions: !!q.shuffleQuestions, shuffleAnswers: !!q.shuffleAnswers, isPublic: q.isPublic === true, questions: q.questions, updatedAt: serverTimestamp() };
   if (q.id) {
     await updateDoc(doc(db, "quizzes", q.id), payload);
   } else {
@@ -1113,6 +1172,25 @@ async function beginGame() {
   await updateDoc(doc(db, "sessions", sessionCode), { status, currentIndex: 0, questionStartedAt: Date.now() });
 }
 
+// Encerra a sessão AGORA, de onde ela estiver — calcula o placar final
+// com o que já foi jogado até aqui (sem apagar nada, ao contrário de
+// excluir a sessão). Útil se alguém desistir no meio do jogo.
+async function finalizeSessionNow(askConfirm = true) {
+  if (askConfirm && !confirm("Encerrar essa sessão agora? Isso calcula o resultado final com o placar de até aqui — as perguntas que ainda não rolaram ficam de fora. Não pode ser desfeito.")) return;
+  const scoresSnap = await getDocs(collection(db, "sessions", sessionCode, "scores"));
+  const totals = {};
+  scoresSnap.forEach((d) => (totals[d.id] = d.data().total || 0));
+  const final = buildLeaderboardRows({ gameMode: sessionData.gameMode, teamMode: sessionData.teamMode, players: sessionPlayers, totals });
+  await updateDoc(doc(db, "sessions", sessionCode), { status: "ended", finalLeaderboard: final });
+}
+
+function endSessionButtonHtml() {
+  return `<button class="btn-link" id="end-session-now-btn" style="margin-top:14px; color:var(--coral);">encerrar sessão agora (finaliza onde parou)</button>`;
+}
+function bindEndSessionButton() {
+  document.getElementById("end-session-now-btn")?.addEventListener("click", () => finalizeSessionNow(true));
+}
+
 /* ---------------- corrida livre ---------------- */
 let raceControlInt = null;
 let unsubRaceScores = null;
@@ -1274,8 +1352,10 @@ function renderBluffWrite() {
     <p style="color:var(--text-dim); text-align:center; font-size:13px;">Cada jogador está escrevendo a própria resposta falsa no celular...</p>
     <div id="bluff-write-count" style="color:var(--text-dim); margin-top:18px; text-align:center;">carregando...</div>
     <button class="btn btn-primary btn-block" id="bluff-vote-btn" style="margin-top:18px;">Ir pra votação agora</button>
+    <div style="text-align:center;">${endSessionButtonHtml()}</div>
   `;
   document.getElementById("bluff-vote-btn").onclick = goToBluffVote;
+  bindEndSessionButton();
 
   const tick = async () => {
     const total = Object.keys(sessionPlayers).length;
@@ -1307,8 +1387,10 @@ function renderBluffVote() {
     <p style="color:var(--text-dim); text-align:center; font-size:13px;">Cada um está votando em qual resposta acha que é a verdadeira...</p>
     <div id="bluff-vote-count" style="color:var(--text-dim); margin-top:18px; text-align:center;">carregando...</div>
     <button class="btn btn-primary btn-block" id="bluff-reveal-btn" style="margin-top:18px;">Revelar agora</button>
+    <div style="text-align:center;">${endSessionButtonHtml()}</div>
   `;
   document.getElementById("bluff-reveal-btn").onclick = revealBluff;
+  bindEndSessionButton();
 
   const tick = async () => {
     const total = Object.keys(sessionPlayers).length;
@@ -1387,8 +1469,10 @@ function renderBluffReveal() {
     </div>
     <button class="btn btn-primary btn-block" id="bluff-leaderboard-btn" style="margin-top:18px;">Ver placar →</button>
     <div id="ready-count-bluffreveal" style="text-align:center; font-size:11px; color:var(--text-dim); margin-top:8px;"></div>
+    <div style="text-align:center;">${endSessionButtonHtml()}</div>
   `;
   document.getElementById("bluff-leaderboard-btn").onclick = showLeaderboard;
+  bindEndSessionButton();
   pollReadyCount("bluffreveal", showLeaderboard, "ready-count-bluffreveal");
 }
 
@@ -1418,10 +1502,12 @@ function renderQuestionLive() {
     <div id="answered-count" style="color:var(--text-dim); margin-top:18px; text-align:center;">carregando respostas...</div>
     <div style="color:var(--text-dim); font-size:11px; text-align:center; margin-top:2px;">revela sozinho quando todo mundo responder</div>
     <button class="btn btn-primary btn-block" id="reveal-btn" style="margin-top:14px;">Revelar respostas agora</button>
+    <div style="text-align:center;">${endSessionButtonHtml()}</div>
   `;
   draw();
   liveTimerInt = setInterval(draw, 250);
   document.getElementById("reveal-btn").onclick = revealAnswers;
+  bindEndSessionButton();
   pollAnsweredCount();
 }
 
@@ -1560,8 +1646,10 @@ function renderReveal() {
     }).join("")}
     <button class="btn btn-primary btn-block" id="leaderboard-btn" style="margin-top:18px;">Ver placar →</button>
     <div id="ready-count-reveal" style="text-align:center; font-size:11px; color:var(--text-dim); margin-top:8px;"></div>
+    <div style="text-align:center;">${endSessionButtonHtml()}</div>
   `;
   document.getElementById("leaderboard-btn").onclick = showLeaderboard;
+  bindEndSessionButton();
   pollReadyCount("reveal", showLeaderboard, "ready-count-reveal");
 }
 
@@ -1605,8 +1693,10 @@ function renderLeaderboard() {
       ${s.currentIndex + 1 >= s.questions.length ? "Ver resultado final →" : "Próxima pergunta →"}
     </button>
     <div id="ready-count-leaderboard" style="text-align:center; font-size:11px; color:var(--text-dim); margin-top:8px;"></div>
+    <div style="text-align:center;">${endSessionButtonHtml()}</div>
   `;
   document.getElementById("next-btn").onclick = nextQuestion;
+  bindEndSessionButton();
   pollReadyCount("leaderboard", nextQuestion, "ready-count-leaderboard");
   root.querySelectorAll("[data-remove-player]").forEach((btn) => {
     btn.onclick = async () => {
@@ -1688,6 +1778,25 @@ function renderEnded() {
 }
 
 /* ================= SESSÕES (HISTÓRICO) ================= */
+function subscribeCommunityQuizzes() {
+  unsubCommunityQuizzes && unsubCommunityQuizzes();
+  unsubCommunityQuizzes = onSnapshot(
+    query(collection(db, "quizzes"), where("isPublic", "==", true)),
+    (snap) => {
+      communityQuizzes = snap.docs
+        .map((d) => ({ id: d.id, ...d.data() }))
+        .filter((q) => q.ownerId !== currentUser.uid)
+        .sort((a, b) => (b.createdAt?.toMillis?.() || 0) - (a.createdAt?.toMillis?.() || 0));
+      if (view === "community") render();
+    },
+    (err) => {
+      console.error("Erro ao carregar quizzes da comunidade:", err);
+      communityQuizzes = [];
+      if (view === "community") render();
+    }
+  );
+}
+
 function subscribeSessionsList() {
   unsubSessionsList && unsubSessionsList();
   unsubSessionsList = onSnapshot(
@@ -1872,14 +1981,15 @@ async function openReport(code) {
     playerIds.forEach((pid) => {
       individualTotals[pid] = perQuestion.reduce((sum, q) => sum + (q.rows.find((r) => r.playerId === pid)?.points || 0), 0);
     });
+    const individualStandings = playerIds.map((pid) => ({
+      playerId: pid, name: players[pid].name, avatar: players[pid].avatar, team: players[pid].team || null, total: individualTotals[pid],
+    })).sort((a, b) => b.total - a.total);
     const totals = (sess.teamMode || sess.gameMode === "cooperativo")
       ? buildLeaderboardRows({ gameMode: sess.gameMode, teamMode: sess.teamMode, players, totals: individualTotals })
           .map((row) => ({ playerId: row.id, name: row.name, avatar: row.avatar, total: row.total }))
-      : playerIds.map((pid) => ({
-          playerId: pid, name: players[pid].name, avatar: players[pid].avatar, total: individualTotals[pid],
-        })).sort((a, b) => b.total - a.total);
+      : individualStandings;
 
-    reportData = { title: sess.title, code, gameMode: sess.gameMode, perQuestion, totals };
+    reportData = { title: sess.title, code, gameMode: sess.gameMode, teamMode: sess.teamMode, perQuestion, totals, individualStandings: sess.teamMode ? individualStandings : null };
     if (view === "report") render();
     return;
   }
@@ -1933,14 +2043,15 @@ async function openReport(code) {
   playerIds.forEach((pid) => {
     individualTotals[pid] = perPlayerScored[pid].reduce((sum, s) => sum + s.points, 0);
   });
+  const individualStandings = playerIds.map((pid) => ({
+    playerId: pid, name: players[pid].name, avatar: players[pid].avatar, team: players[pid].team || null, total: individualTotals[pid],
+  })).sort((a, b) => b.total - a.total);
   const totals = (sess.teamMode || sess.gameMode === "cooperativo")
     ? buildLeaderboardRows({ gameMode: sess.gameMode, teamMode: sess.teamMode, players, totals: individualTotals })
         .map((row) => ({ playerId: row.id, name: row.name, avatar: row.avatar, total: row.total }))
-    : playerIds.map((pid) => ({
-        playerId: pid, name: players[pid].name, avatar: players[pid].avatar, total: individualTotals[pid],
-      })).sort((a, b) => b.total - a.total);
+    : individualStandings;
 
-  reportData = { title: sess.title, code, gameMode: sess.gameMode, perQuestion, totals };
+  reportData = { title: sess.title, code, gameMode: sess.gameMode, teamMode: sess.teamMode, perQuestion, totals, individualStandings: sess.teamMode ? individualStandings : null };
   if (view === "report") render();
 }
 
@@ -1957,7 +2068,7 @@ function renderReport() {
     </div>
 
     <div class="card" style="margin-top:18px;">
-      <div style="font-weight:700; margin-bottom:10px;">Classificação final</div>
+      <div style="font-weight:700; margin-bottom:10px;">${r.teamMode ? "Classificação por equipe" : "Classificação final"}</div>
       ${r.totals.map((p, i) => `
         <div class="rank-row">
           <span class="rank-num" style="color:${i === 0 ? "var(--gold)" : "var(--text-dim)"};">${i + 1}</span>
@@ -1968,6 +2079,20 @@ function renderReport() {
         </div>
       `).join("")}
     </div>
+
+    ${r.individualStandings ? `
+    <div class="card" style="margin-top:14px;">
+      <div style="font-weight:700; margin-bottom:10px;">Classificação individual (dentro do time)</div>
+      ${r.individualStandings.map((p, i) => `
+        <div class="rank-row">
+          <span class="rank-num" style="color:${i === 0 ? "var(--gold)" : "var(--text-dim)"};">${i + 1}</span>
+          ${p.avatar ? `<span class="mini-avatar">${avatarSVG(p.avatar, 30)}</span>` : ""}
+          <span style="flex:1; font-weight:600;">${escapeHtml(p.name)} <span style="color:var(--text-dim); font-weight:400; font-size:12px;">· ${escapeHtml(p.team || "sem time")}</span></span>
+          <span style="color:var(--gold); font-weight:700;">${p.total}</span>
+        </div>
+      `).join("")}
+    </div>
+    ` : ""}
 
     ${r.perQuestion.map((q, idx) => `
       <div class="card" style="margin-top:14px;">
@@ -2001,7 +2126,18 @@ function renderReport() {
 }
 
 function downloadReportCsv(r) {
-  const lines = [["Pergunta", "Jogador", "Resposta", "Tempo (s)", "Certo?", "Combo", "Bônus (pts)", "Pontos"].join(";")];
+  const lines = [];
+  lines.push([r.teamMode ? "Classificação por equipe" : "Classificação final"].join(";"));
+  lines.push(["#", "Nome", "Pontos"].join(";"));
+  r.totals.forEach((p, i) => lines.push([i + 1, `"${p.name.replace(/"/g, '""')}"`, p.total].join(";")));
+  if (r.individualStandings) {
+    lines.push("");
+    lines.push(["Classificação individual (dentro do time)"].join(";"));
+    lines.push(["#", "Jogador", "Time", "Pontos"].join(";"));
+    r.individualStandings.forEach((p, i) => lines.push([i + 1, `"${p.name.replace(/"/g, '""')}"`, `"${(p.team || "sem time").replace(/"/g, '""')}"`, p.total].join(";")));
+  }
+  lines.push("");
+  lines.push(["Pergunta", "Jogador", "Resposta", "Tempo (s)", "Certo?", "Combo", "Bônus (pts)", "Pontos"].join(";"));
   r.perQuestion.forEach((q, idx) => {
     q.rows.forEach((row) => {
       lines.push([
@@ -2032,7 +2168,7 @@ function downloadReportPdf(r) {
   const pageW = doc.internal.pageSize.getWidth();
 
   let y = addPdfHeader(doc, { eyebrow: "relatório do quiz", title: r.title, subtitle: `sala ${r.code} · ${GAME_MODES.find((m) => m.id === r.gameMode)?.label || "Clássico"}` });
-  y = addSectionTitle(doc, "Classificação geral", y);
+  y = addSectionTitle(doc, r.teamMode ? "Classificação por equipe" : "Classificação geral", y);
   doc.autoTable({
     startY: y,
     head: [["#", "Jogador", "Pontos"]],
@@ -2041,6 +2177,19 @@ function downloadReportPdf(r) {
     margin: { left: 14, right: 14 },
   });
   y = doc.lastAutoTable.finalY + 14;
+
+  if (r.individualStandings) {
+    if (y > pageH - 60) { doc.addPage(); y = 20; }
+    y = addSectionTitle(doc, "Classificação individual (dentro do time)", y);
+    doc.autoTable({
+      startY: y,
+      head: [["#", "Jogador", "Time", "Pontos"]],
+      body: r.individualStandings.map((p, i) => [String(i + 1), p.name, p.team || "sem time", String(p.total)]),
+      ...AUTOTABLE_THEME,
+      margin: { left: 14, right: 14 },
+    });
+    y = doc.lastAutoTable.finalY + 14;
+  }
 
   r.perQuestion.forEach((q, idx) => {
     if (y > pageH - 50) { doc.addPage(); y = 20; }
