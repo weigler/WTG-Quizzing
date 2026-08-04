@@ -69,16 +69,22 @@ function viewForStatus(status) {
 }
 
 async function boot() {
+  const params = new URLSearchParams(window.location.search);
+  const codeFromUrl = params.get("code");
+  const wantsResults = params.get("view") === "results";
+
   let saved = null;
   try {
     saved = JSON.parse(localStorage.getItem("quiz-player") || "null");
   } catch {
     localStorage.removeItem("quiz-player");
   }
-  const params = new URLSearchParams(window.location.search);
-  const codeFromUrl = params.get("code");
 
-  if (saved?.code && saved?.playerId) {
+  // Veio pelo cartão "Ver resultados" da página inicial: isso é uma
+  // escolha explícita da pessoa, então tem prioridade sobre retomar um
+  // jogo salvo no navegador (senão ela nunca sairia do jogo anterior
+  // pra ver o hub de busca).
+  if (!wantsResults && saved?.code && saved?.playerId) {
     try {
       const snap = await getDoc(doc(db, "sessions", saved.code));
       if (snap.exists() && snap.data().status !== "ended") {
@@ -105,10 +111,7 @@ async function boot() {
   if (codeFromUrl && /^\d{6}$/.test(codeFromUrl)) {
     joinCodeValue = codeFromUrl;
   }
-  // Veio pelo cartão "Ver resultados" da página inicial — pula a tela de
-  // código/nome e abre direto o hub de busca (resultado individual ou
-  // placar da sala inteira).
-  if (params.get("view") === "results") {
+  if (wantsResults) {
     view = "resultshub";
   }
   render();
