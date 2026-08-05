@@ -1,22 +1,42 @@
-// Mesma fórmula do Kahoot: até 1000 pontos, caindo linearmente até 500
-// conforme o tempo de resposta se aproxima do limite da pergunta.
+// Mesma fórmula do Kahoot: até 1000 pontos, caindo linearmente até um
+// "piso" conforme o tempo de resposta se aproxima do limite da pergunta.
 // Errado = 0, sempre. O multiplicador permite perguntas "bônus" que valem
 // em dobro (ou mais).
 //
+// O piso é controlado por SPEED_WEIGHT — o quanto a velocidade pesa na
+// pontuação de uma resposta certa:
+//   padrao   → piso 50% (padrão clássico do Kahoot)
+//   reduzido → piso 75% (velocidade ainda importa, mas menos)
+//   minimo   → piso 90% (só separa quem foi instantâneo do resto)
+//   precisao → piso 100% (velocidade não conta nada — só acerto importa)
+//
 // Resposta instantânea (menos de 0,5s): pontuação máxima garantida, sem
 // desconto nenhum de tempo — recompensa quem já sabia na hora.
-//
-// Modo de precisão (opcional, por quiz): ignora a velocidade por completo
-// e vale só se acertou ou não — sempre pontuação máxima quando certo.
 const INSTANT_THRESHOLD_MS = 500;
 
-export function kahootPoints(timeMs, timeLimitSeconds, multiplier = 1, precisionMode = false) {
+export const SPEED_WEIGHT_FLOORS = { padrao: 0.5, reduzido: 0.75, minimo: 0.9, precisao: 1 };
+export const SPEED_WEIGHT_LABELS = {
+  padrao: "Padrão — velocidade pesa bastante (clássico do Kahoot)",
+  reduzido: "Reduzido — velocidade ainda conta, mas menos",
+  minimo: "Mínimo — velocidade quase não conta",
+  precisao: "Precisão — só o acerto importa, velocidade não conta",
+};
+export const DEFAULT_SPEED_WEIGHT = "padrao";
+
+// Compatibilidade com quizzes/sessões salvos antes desse controle existir
+// (eles só tinham o antigo campo booleano precisionMode).
+export function resolveSpeedWeight(obj) {
+  if (obj?.speedWeight && SPEED_WEIGHT_FLOORS[obj.speedWeight] !== undefined) return obj.speedWeight;
+  return obj?.precisionMode ? "precisao" : DEFAULT_SPEED_WEIGHT;
+}
+
+export function kahootPoints(timeMs, timeLimitSeconds, multiplier = 1, speedWeight = DEFAULT_SPEED_WEIGHT) {
   const m = multiplier || 1;
-  if (precisionMode) return Math.round(1000 * m);
+  const floor = SPEED_WEIGHT_FLOORS[speedWeight] ?? SPEED_WEIGHT_FLOORS[DEFAULT_SPEED_WEIGHT];
   const t = Math.max(timeMs || 0, 0);
-  if (t < INSTANT_THRESHOLD_MS) return Math.round(1000 * m);
+  if (floor >= 1 || t < INSTANT_THRESHOLD_MS) return Math.round(1000 * m);
   const frac = Math.min(t / (timeLimitSeconds * 1000), 1);
-  return Math.round(1000 * (1 - frac / 2) * m);
+  return Math.round(1000 * (1 - frac * (1 - floor)) * m);
 }
 
 // Bônus de combo: acertar perguntas seguidas acumula pontos extras.
@@ -31,10 +51,10 @@ export function comboBonus(streak) {
 // Usado pelo admin ao revelar cada pergunta, sequencialmente. O bônus de
 // combo só entra se o quiz tiver o Modo Combo ativado (desligado por
 // padrão, igual o Modo de Precisão).
-export function nextQuestionScore({ prevStreak = 0, correct, timeMs, timeLimit, multiplier = 1, precisionMode = false, comboMode = false }) {
+export function nextQuestionScore({ prevStreak = 0, correct, timeMs, timeLimit, multiplier = 1, speedWeight = DEFAULT_SPEED_WEIGHT, comboMode = false }) {
   if (!correct) return { points: 0, newStreak: 0, combo: 0, bonus: 0 };
   const newStreak = prevStreak + 1;
-  const base = kahootPoints(timeMs, timeLimit, multiplier, precisionMode);
+  const base = kahootPoints(timeMs, timeLimit, multiplier, speedWeight);
   const bonus = comboMode ? comboBonus(newStreak) : 0;
   return { points: base + bonus, newStreak, combo: comboMode && newStreak >= 2 ? newStreak : 0, bonus };
 }
@@ -42,12 +62,12 @@ export function nextQuestionScore({ prevStreak = 0, correct, timeMs, timeLimit, 
 // Recalcula a pontuação de uma sequência inteira de perguntas (usado nos
 // relatórios e no PDF), reconstruindo o combo do zero — dá o mesmo
 // resultado de quando foi jogado ao vivo, pergunta por pergunta.
-export function scoreQuestionSequence(items, precisionMode = false, comboMode = false) {
+export function scoreQuestionSequence(items, speedWeight = DEFAULT_SPEED_WEIGHT, comboMode = false) {
   let streak = 0;
   return items.map((it) => {
     if (!it.correct) { streak = 0; return { points: 0, combo: 0, bonus: 0 }; }
     streak += 1;
-    const base = kahootPoints(it.timeMs, it.timeLimit, it.multiplier, precisionMode);
+    const base = kahootPoints(it.timeMs, it.timeLimit, it.multiplier, speedWeight);
     const bonus = comboMode ? comboBonus(streak) : 0;
     return { points: base + bonus, combo: comboMode && streak >= 2 ? streak : 0, bonus };
   });

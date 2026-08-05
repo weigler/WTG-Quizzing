@@ -10,7 +10,7 @@ import {
 import { firebaseConfig } from "../shared/firebase-config.js";
 import { UNSPLASH_ACCESS_KEY } from "../shared/unsplash-config.js";
 import { avatarSVG } from "../shared/avatar.js";
-import { questionMaxPoints, nextQuestionScore, scoreQuestionSequence } from "../shared/scoring.js";
+import { questionMaxPoints, nextQuestionScore, scoreQuestionSequence, resolveSpeedWeight, SPEED_WEIGHT_LABELS, DEFAULT_SPEED_WEIGHT } from "../shared/scoring.js";
 import { getJsPDF, addPdfHeader, addSectionTitle, AUTOTABLE_THEME } from "../shared/pdf-helpers.js";
 import { parseQuizText, IMPORT_TEMPLATE } from "../shared/import-parser.js";
 import { MUSIC_TRACKS, findTrack, SUGGESTED_SOURCES } from "../shared/music-tracks.js";
@@ -121,7 +121,7 @@ function emptyQuestion(timeLimit = 20, image = null) {
   return { id: rid(), text: "", type: "single", options: ["", ""], correct: [], timeLimit, pointsMultiplier: 1, imageUrl: image?.url || null, imageCredit: image?.credit || null };
 }
 function emptyQuiz() {
-  return { id: null, title: "", theme: "", coverImage: null, coverCredit: null, defaultTimeLimit: 20, musicUrl: null, precisionMode: false, comboMode: false, shuffleQuestions: false, shuffleAnswers: false, isPublic: true, questions: [] };
+  return { id: null, title: "", theme: "", coverImage: null, coverCredit: null, defaultTimeLimit: 20, musicUrl: null, isPublic: true, questions: [] };
 }
 
 function subscribeQuizzes() {
@@ -283,10 +283,6 @@ async function duplicateQuiz(q, opts = {}) {
     coverCredit: copy.coverCredit || null,
     defaultTimeLimit: copy.defaultTimeLimit || 20,
     musicUrl: copy.musicUrl || null,
-    precisionMode: !!copy.precisionMode,
-    comboMode: !!copy.comboMode,
-    shuffleQuestions: !!copy.shuffleQuestions,
-    shuffleAnswers: !!copy.shuffleAnswers,
     // copiando de outra pessoa: começa privado por padrão (o dono novo
     // decide se quer publicar); duplicando o próprio quiz: mantém como
     // já estava
@@ -316,6 +312,10 @@ function defaultLaunchConfig() {
     raceSubmode: "sync",
     raceWindowValue: 24,
     raceWindowUnit: "horas",
+    speedWeight: DEFAULT_SPEED_WEIGHT,
+    comboMode: false,
+    shuffleQuestions: false,
+    shuffleAnswers: false,
   };
 }
 
@@ -335,8 +335,8 @@ async function launchSession(quiz, config) {
     existing = await getDoc(doc(db, "sessions", code));
   }
   let questions = JSON.parse(JSON.stringify(quiz.questions));
-  if (quiz.shuffleQuestions) questions = shuffleArray(questions);
-  if (quiz.shuffleAnswers) questions = questions.map(shuffleQuestionOptions);
+  if (config.shuffleQuestions) questions = shuffleArray(questions);
+  if (config.shuffleAnswers) questions = questions.map(shuffleQuestionOptions);
   const gameMode = config.gameMode || "classico";
   const isTeams = gameMode === "equipes";
   const session = {
@@ -346,8 +346,8 @@ async function launchSession(quiz, config) {
     status: "lobby",
     questions,
     musicUrl: quiz.musicUrl || null,
-    precisionMode: !!quiz.precisionMode,
-    comboMode: !!quiz.comboMode,
+    speedWeight: config.speedWeight || DEFAULT_SPEED_WEIGHT,
+    comboMode: !!config.comboMode,
     gameMode,
     teamMode: isTeams,
     teamSubmode: isTeams ? (config.teamSubmode || "individual") : null,
@@ -394,6 +394,28 @@ function renderLaunchConfig() {
         ${GAME_MODES.map((m) => `<option value="${m.id}" ${c.gameMode === m.id ? "selected" : ""}>${m.label}</option>`).join("")}
       </select>
       <div style="font-size:11px; color:var(--text-dim); margin-top:6px;">${GAME_MODE_HINTS[c.gameMode] || ""}</div>
+    </div>
+
+    <div id="launch-scoring-config" style="display:${c.gameMode === "blefe" ? "none" : "block"}; margin-top:16px;">
+      <label style="font-size:13px; color:var(--text-dim);">Peso da velocidade na pontuação</label>
+      <select class="input" id="launch-speed-weight" style="margin-top:6px; margin-bottom:12px;">
+        ${Object.entries(SPEED_WEIGHT_LABELS).map(([key, label]) => `<option value="${key}" ${c.speedWeight === key ? "selected" : ""}>${label}</option>`).join("")}
+      </select>
+      <label style="display:flex; align-items:center; gap:8px; margin-bottom:4px; font-size:13px; color:var(--text-dim); cursor:pointer;">
+        <input type="checkbox" id="launch-combo" ${c.comboMode ? "checked" : ""} />
+        <span><b style="color:var(--text);">Modo Combo</b> — acertar perguntas seguidas acumula um bônus extra de pontos</span>
+      </label>
+    </div>
+
+    <div style="margin-top:12px;">
+      <label style="display:flex; align-items:center; gap:8px; margin-bottom:4px; font-size:13px; color:var(--text-dim); cursor:pointer;">
+        <input type="checkbox" id="launch-shuffle-questions" ${c.shuffleQuestions ? "checked" : ""} />
+        <span><b style="color:var(--text);">Embaralhar perguntas</b> — sorteia uma ordem diferente nessa sala</span>
+      </label>
+      <label style="display:flex; align-items:center; gap:8px; font-size:13px; color:var(--text-dim); cursor:pointer;">
+        <input type="checkbox" id="launch-shuffle-answers" ${c.shuffleAnswers ? "checked" : ""} />
+        <span><b style="color:var(--text);">Embaralhar respostas</b> — sorteia a ordem das opções de cada pergunta nessa sala</span>
+      </label>
     </div>
 
     <div id="launch-teams-config" style="display:${c.gameMode === "equipes" ? "block" : "none"}; margin-top:16px;">
@@ -450,6 +472,10 @@ function renderLaunchConfig() {
 
   document.getElementById("launch-back").onclick = () => { view = "list"; render(); };
   document.getElementById("launch-mode").onchange = (e) => { c.gameMode = e.target.value; renderLaunchConfig(); };
+  document.getElementById("launch-speed-weight")?.addEventListener("change", (e) => (c.speedWeight = e.target.value));
+  document.getElementById("launch-combo")?.addEventListener("change", (e) => (c.comboMode = e.target.checked));
+  document.getElementById("launch-shuffle-questions")?.addEventListener("change", (e) => (c.shuffleQuestions = e.target.checked));
+  document.getElementById("launch-shuffle-answers")?.addEventListener("change", (e) => (c.shuffleAnswers = e.target.checked));
   document.getElementById("launch-team-submode")?.addEventListener("change", (e) => (c.teamSubmode = e.target.value));
   document.querySelectorAll("[data-team]").forEach((input) => {
     input.oninput = (e) => { c.teams[Number(input.dataset.team)] = e.target.value; };
@@ -527,26 +553,6 @@ function renderEditor() {
       </div>
     </div>
 
-    <label style="display:flex; align-items:center; gap:8px; margin-bottom:10px; font-size:13px; color:var(--text-dim); cursor:pointer;">
-      <input type="checkbox" id="quiz-precision" ${q.precisionMode ? "checked" : ""} />
-      <span><b style="color:var(--text);">Modo de Precisão</b> — pontuação só pelo acerto (1000 pontos fixos), sem contar velocidade</span>
-    </label>
-
-    <label style="display:flex; align-items:center; gap:8px; margin-bottom:10px; font-size:13px; color:var(--text-dim); cursor:pointer;">
-      <input type="checkbox" id="quiz-combo" ${q.comboMode ? "checked" : ""} />
-      <span><b style="color:var(--text);">Modo Combo</b> — acertar perguntas seguidas acumula um bônus extra de pontos (desligado por padrão)</span>
-    </label>
-
-    <label style="display:flex; align-items:center; gap:8px; margin-bottom:10px; font-size:13px; color:var(--text-dim); cursor:pointer;">
-      <input type="checkbox" id="quiz-shuffle-questions" ${q.shuffleQuestions ? "checked" : ""} />
-      <span><b style="color:var(--text);">Embaralhar perguntas</b> — sorteia uma ordem diferente toda vez que a sala é aberta</span>
-    </label>
-
-    <label style="display:flex; align-items:center; gap:8px; margin-bottom:20px; font-size:13px; color:var(--text-dim); cursor:pointer;">
-      <input type="checkbox" id="quiz-shuffle-answers" ${q.shuffleAnswers ? "checked" : ""} />
-      <span><b style="color:var(--text);">Embaralhar respostas</b> — sorteia a ordem das opções de cada pergunta toda vez que a sala é aberta</span>
-    </label>
-
     <div style="display:flex; justify-content:space-between; align-items:center; margin-bottom:10px;">
       <div style="font-weight:700; font-family:var(--font-display);">Perguntas</div>
       <button type="button" class="btn btn-ghost" id="open-import-btn" style="width:auto; padding:8px 14px; font-size:13px;">Importar perguntas</button>
@@ -594,10 +600,6 @@ function renderEditor() {
     document.getElementById("quiz-music-preset").value = "custom";
   };
   document.getElementById("music-test-btn").onclick = () => testMusic(document.getElementById("quiz-music").value.trim());
-  document.getElementById("quiz-precision").onchange = (e) => (q.precisionMode = e.target.checked);
-  document.getElementById("quiz-combo").onchange = (e) => (q.comboMode = e.target.checked);
-  document.getElementById("quiz-shuffle-questions").onchange = (e) => (q.shuffleQuestions = e.target.checked);
-  document.getElementById("quiz-shuffle-answers").onchange = (e) => (q.shuffleAnswers = e.target.checked);
 
   renderQuestionList();
   if (!questionDraft) questionDraft = emptyQuestion(q.defaultTimeLimit || 20);
@@ -852,7 +854,7 @@ async function saveQuiz() {
   if (!q.title.trim()) return (errEl.textContent = "Dê um título ao quiz.");
   if (q.questions.length === 0) return (errEl.textContent = "Adicione ao menos uma pergunta.");
   errEl.textContent = "";
-  const payload = { title: q.title.trim(), theme: q.theme.trim(), coverImage: q.coverImage, coverCredit: q.coverCredit, defaultTimeLimit: q.defaultTimeLimit || 20, musicUrl: q.musicUrl || null, precisionMode: !!q.precisionMode, comboMode: !!q.comboMode, shuffleQuestions: !!q.shuffleQuestions, shuffleAnswers: !!q.shuffleAnswers, isPublic: q.isPublic === true, questions: q.questions, updatedAt: serverTimestamp() };
+  const payload = { title: q.title.trim(), theme: q.theme.trim(), coverImage: q.coverImage, coverCredit: q.coverCredit, defaultTimeLimit: q.defaultTimeLimit || 20, musicUrl: q.musicUrl || null, isPublic: q.isPublic === true, questions: q.questions, updatedAt: serverTimestamp() };
   if (q.id) {
     await updateDoc(doc(db, "quizzes", q.id), payload);
   } else {
@@ -1609,7 +1611,7 @@ async function revealAnswers() {
       timeMs: ans?.timeMs,
       timeLimit: q.timeLimit,
       multiplier: q.pointsMultiplier || 1,
-      precisionMode: !!s.precisionMode,
+      speedWeight: resolveSpeedWeight(s),
       comboMode: !!s.comboMode,
     });
     writes.push(setDoc(doc(db, "sessions", sessionCode, "scores", pid), {
@@ -2050,7 +2052,7 @@ async function openReport(code) {
   });
   const perPlayerScored = {};
   playerIds.forEach((pid) => {
-    perPlayerScored[pid] = scoreQuestionSequence(perPlayerAnswers[pid], !!sess.precisionMode, !!sess.comboMode);
+    perPlayerScored[pid] = scoreQuestionSequence(perPlayerAnswers[pid], resolveSpeedWeight(sess), !!sess.comboMode);
   });
 
   const perQuestion = sess.questions.map((q, idx) => {

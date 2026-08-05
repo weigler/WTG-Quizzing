@@ -5,7 +5,7 @@ import {
 
 import { firebaseConfig } from "../shared/firebase-config.js";
 import { AVATAR_COLORS, SPECIES, SPECIES_LABEL, HATS, GLASSES, defaultAvatar, avatarSVG, avatarPngDataUrl } from "../shared/avatar.js";
-import { lateJoinAllowed, questionMaxPoints, scoreQuestionSequence, kahootPoints } from "../shared/scoring.js";
+import { lateJoinAllowed, questionMaxPoints, scoreQuestionSequence, kahootPoints, resolveSpeedWeight } from "../shared/scoring.js";
 import { cooperativeProgress } from "../shared/game-modes.js";
 import { getJsPDF, addPdfHeader, addSectionTitle, AUTOTABLE_THEME } from "../shared/pdf-helpers.js";
 
@@ -52,6 +52,7 @@ let roomResultsData = null;
 let musicAudioEl = null;
 let musicToggleEl = null;
 let musicMuted = false;
+let inputCooldownUntil = 0;
 
 /* tenta retomar sessão salva no navegador (se a pessoa recarregar a página) —
    mas só se aquela sessão ainda existir e não tiver acabado; caso
@@ -66,6 +67,21 @@ function viewForStatus(status) {
   if (status === "bluffreveal") return "bluffreveal";
   if (status === "ended") return "end";
   return "wait";
+}
+
+// Restaura `hasAnswered`/`mySelected` a partir do que está gravado de
+// verdade no Firestore para a pergunta atual — usado tanto ao carregar a
+// página quanto ao voltar de segundo plano. Cobre "question" (ainda
+// respondendo/aguardando) e também "reveal"/"leaderboard" (a pergunta já
+// fechou, mas a tela de revelação/placar ainda depende de saber o que a
+// pessoa escolheu). Sem isso, um refresh nessas telas fazia parecer que
+// a pessoa não tinha respondido nada, mesmo quando a resposta dela (certa
+// ou errada) já estava gravada no banco.
+async function restoreMyAnswerForCurrentQuestion() {
+  if (!["question", "reveal", "leaderboard"].includes(sessionData?.status)) return;
+  const ansSnap = await getDoc(doc(db, "sessions", code, "answers", `${sessionData.currentIndex}_${playerId}`));
+  hasAnswered = ansSnap.exists();
+  mySelected = ansSnap.exists() ? (ansSnap.data().selected || []) : [];
 }
 
 async function boot() {
@@ -94,10 +110,7 @@ async function boot() {
         if (saved.myRaceStartedAt) myRaceStartedAt = saved.myRaceStartedAt;
         sessionData = snap.data();
         lastIndexAnswered = sessionData.status === "lobby" ? -1 : sessionData.currentIndex;
-        if (sessionData.status === "question") {
-          const ansSnap = await getDoc(doc(db, "sessions", code, "answers", `${sessionData.currentIndex}_${playerId}`));
-          hasAnswered = ansSnap.exists();
-        }
+        await restoreMyAnswerForCurrentQuestion();
         view = viewForStatus(sessionData.status);
         if (sessionData.status === "racing") await startRace();
         subscribeSession();
@@ -126,6 +139,54 @@ boot().catch((err) => {
     <button class="btn btn-primary btn-block" id="reload-btn" style="margin-top:18px;">Recarregar</button>
   `;
   document.getElementById("reload-btn")?.addEventListener("click", () => window.location.reload());
+});
+
+// Trava de segurança contra "toque fantasma": quando a tela do celular
+// destrava depois de ficar bloqueada (ou o app volta de segundo plano),
+// às vezes um toque que já estava em andamento acaba caindo sozinho em
+// cima de um botão que só apareceu naquele instante — registrando uma
+// resposta que a pessoa nunca quis dar (foi exatamente o que aconteceu
+// com a resposta de tempo negativo). Essa função religa a tela com os
+// dados mais atuais do servidor E ignora toques por um instante logo
+// depois disso, até a pessoa realmente decidir tocar em algo.
+function armInputCooldown(ms = 700) {
+  inputCooldownUntil = Date.now() + ms;
+}
+function inputIsCoolingDown() {
+  return Date.now() < inputCooldownUntil;
+}
+
+// No Chrome do iPhone (que por baixo dos panos também roda o motor do
+// Safari, mas sem os mesmos privilégios de segundo plano) o iOS tende a
+// encerrar o processo da aba de forma mais brusca do que no Safari
+// quando a tela trava ou a pessoa troca de app. Essa função resincroniza
+// tudo com o servidor sempre que a página volta a ficar visível — seja
+// por destravar a tela (visibilitychange) ou por voltar de um estado
+// suspenso pelo cache de navegação do próprio navegador (pageshow).
+function resyncAfterBackground() {
+  armInputCooldown();
+  if (!code || !playerId) return;
+  getDoc(doc(db, "sessions", code))
+    .then((snap) => {
+      if (!snap.exists()) return;
+      sessionData = snap.data();
+      return restoreMyAnswerForCurrentQuestion();
+    })
+    .then(() => {
+      reactToStatus();
+      render();
+    })
+    .catch(() => { /* sem internet no momento — o listener normal assume assim que voltar */ });
+}
+
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState === "visible") resyncAfterBackground();
+});
+// "pageshow" com persisted=true dispara quando o navegador restaura a
+// página do próprio cache (bfcache) em vez de recarregar do zero — outro
+// jeito comum de "voltar" no iOS que o visibilitychange sozinho não cobre.
+window.addEventListener("pageshow", (e) => {
+  if (e.persisted) resyncAfterBackground();
 });
 
 /* ---------------- helpers ---------------- */
@@ -173,6 +234,7 @@ function reactToStatus() {
       lastIndexAnswered = -2; // marca que ainda não respondeu essa
       mySelected = [];
       hasAnswered = false;
+      armInputCooldown(); // pergunta nova na tela — protege contra toque fantasma
     }
     view = "question";
     return;
@@ -236,6 +298,7 @@ async function startRace() {
   }
   raceIndex = resumeIndex;
   raceQuestionShownAt = Date.now();
+  armInputCooldown();
   if (view === "race") render();
 }
 
@@ -299,6 +362,7 @@ function renderRace() {
   `).join("");
   optsEl.querySelectorAll("button").forEach((btn) => {
     btn.onclick = () => {
+      if (inputIsCoolingDown()) return;
       const i = Number(btn.dataset.i);
       if (q.type === "multiple") {
         const idx = raceSelected.indexOf(i);
@@ -310,7 +374,7 @@ function renderRace() {
       }
     };
   });
-  document.getElementById("race-confirm")?.addEventListener("click", () => submitRaceAnswer());
+  document.getElementById("race-confirm")?.addEventListener("click", () => { if (!inputIsCoolingDown()) submitRaceAnswer(); });
 
   liveTimerInt = setInterval(() => {
     if (view !== "race" || raceFeedback) return;
@@ -344,11 +408,11 @@ async function submitRaceAnswer(sel) {
   raceSubmitting = true;
 
   try {
-    const timeMs = Date.now() - raceQuestionShownAt;
+    const timeMs = Math.max(0, Date.now() - raceQuestionShownAt);
     const selKey = [...selected].sort().join(",");
     const corKey = [...(q.correct || [])].sort().join(",");
     const correct = selKey === corKey && selKey !== "";
-    const points = correct ? kahootPoints(timeMs, q.timeLimit, q.pointsMultiplier || 1, !!s.precisionMode) : 0;
+    const points = correct ? kahootPoints(timeMs, q.timeLimit, q.pointsMultiplier || 1, resolveSpeedWeight(s)) : 0;
 
     await setDoc(doc(db, "sessions", code, "answers", `${raceIndex}_${playerId}`), {
       playerId, questionIndex: raceIndex, selected, timeMs, submittedAt: Date.now(),
@@ -367,6 +431,7 @@ async function submitRaceAnswer(sel) {
       raceSelected = [];
       raceQuestionShownAt = Date.now();
       raceSubmitting = false;
+      armInputCooldown(250); // janela curta — é uma transição previsível, não um retorno de segundo plano
       render();
     }, 900);
   } catch (err) {
@@ -589,10 +654,7 @@ async function joinRoom() {
   mySelected = [];
   lastIndexAnswered = sessionData.status === "lobby" ? -1 : sessionData.currentIndex;
   hasAnswered = false;
-  if (sessionData.status === "question") {
-    const ansSnap = await getDoc(doc(db, "sessions", code, "answers", `${sessionData.currentIndex}_${playerId}`));
-    hasAnswered = ansSnap.exists();
-  }
+  await restoreMyAnswerForCurrentQuestion();
   view = viewForStatus(sessionData.status);
   if (sessionData.status === "racing") await startRace();
   subscribeSession();
@@ -612,7 +674,7 @@ async function submitAnswer(sel, force = false) {
   lastIndexAnswered = sessionData.currentIndex;
   mySelected = selected;
   render();
-  const timeMs = Date.now() - (sessionData.questionStartedAt || Date.now());
+  const timeMs = Math.max(0, Date.now() - (sessionData.questionStartedAt || Date.now()));
   await setDoc(doc(db, "sessions", code, "answers", `${sessionData.currentIndex}_${playerId}`), {
     playerId, questionIndex: sessionData.currentIndex, selected, timeMs, submittedAt: Date.now(),
   });
@@ -697,6 +759,11 @@ function render() {
   }
 }
 
+function isIOSChrome() {
+  const ua = navigator.userAgent || "";
+  return /CriOS/.test(ua) && /iPhone|iPad|iPod/.test(ua);
+}
+
 function renderJoin() {
   root.innerHTML = `
     <div class="eyebrow">quiz ao vivo</div>
@@ -705,6 +772,11 @@ function renderJoin() {
     <input class="input" id="join-name" placeholder="Seu nome" maxlength="20" style="margin-top:12px;" />
     <div id="join-error" class="error-text"></div>
     <button class="btn btn-primary btn-block" id="join-btn" style="margin-top:18px;">Entrar →</button>
+    ${isIOSChrome() ? `
+      <p style="color:var(--text-dim); font-size:11px; margin-top:16px;">
+        💡 Notamos que você tá usando o Chrome no iPhone — o jogo costuma ficar mais estável no <b>Safari</b> (o app azul que já vem no iPhone), especialmente se a tela travar durante o jogo.
+      </p>
+    ` : ""}
   `;
   const codeInput = document.getElementById("join-code");
   codeInput.oninput = () => (codeInput.value = codeInput.value.replace(/\D/g, "").slice(0, 6));
@@ -1049,6 +1121,7 @@ function renderQuestion() {
 
   optsEl.querySelectorAll("button").forEach((btn) => {
     btn.onclick = () => {
+      if (inputIsCoolingDown()) return;
       const i = Number(btn.dataset.i);
       if (q.type === "multiple") {
         const idx = mySelected.indexOf(i);
@@ -1060,7 +1133,7 @@ function renderQuestion() {
       }
     };
   });
-  document.getElementById("confirm-btn")?.addEventListener("click", () => submitAnswer());
+  document.getElementById("confirm-btn")?.addEventListener("click", () => { if (!inputIsCoolingDown()) submitAnswer(); });
   document.getElementById("leave-btn").onclick = leaveGame;
 
   const draw = () => {
@@ -1324,7 +1397,7 @@ async function downloadMyReportPdf(btnId = "pdf-btn") {
         const correct = sel === cor && sel !== "";
         return { correct, timeMs: ans.timeMs, timeLimit: q.timeLimit, multiplier: q.pointsMultiplier || 1, ans };
       });
-      const scored = scoreQuestionSequence(items, !!s.precisionMode, !!s.comboMode);
+      const scored = scoreQuestionSequence(items, resolveSpeedWeight(s), !!s.comboMode);
 
       rows = s.questions.map((q, idx) => {
         const item = items[idx];
